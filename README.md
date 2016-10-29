@@ -1,2 +1,2 @@
-# rust-graphql
+# graphql-rust
 GraphQL in Rust!
