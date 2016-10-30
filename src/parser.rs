@@ -242,9 +242,18 @@ make_parser!(
 );
 
 make_parser!(
-  NameP(input: char) -> Name {
+  NameP(input: char) -> String {
     or(letter(),char('_'))
-      .with(many(alpha_num().or(char('_'))))
+      .map(|c| {
+        let mut result = String::new();
+        result.push(c);
+        result
+      })
+      .and(many::<String,_>(alpha_num().or(char('_'))))
+      .map(|(mut f,r)| {
+        f.push_str(&r);
+        f
+      })
       .parse_stream(input)
   }
 );
@@ -304,5 +313,9 @@ mod tests {
   #[test]
   fn test_parse_name() {
     assert_sucessful_parse!(NameP, "_asd", String::from("_asd"));
+    assert_sucessful_parse!(NameP, "aasd", String::from("aasd"));
+    assert_sucessful_parse!(NameP, "zasd", String::from("zasd"));
+    assert_sucessful_parse!(NameP, "Aasd", String::from("Aasd"));
+    assert_sucessful_parse!(NameP, "Zasd", String::from("Zasd"));
   }
 }
