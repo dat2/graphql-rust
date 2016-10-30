@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use combine::{Parser, ParseResult, Stream, value};
-use combine::char::{tab, char, crlf};
+use combine::char::{tab, char, crlf, string};
 use combine::combinator::{many, none_of};
 
 pub type Name = String;
@@ -228,10 +228,13 @@ make_parser!(
   }
 );
 
-// pub fn comma<I: U8Input>(i: I) -> SimpleResult<I,u8>
-// {
-//   token(i, b',')
-// }
+make_parser!(
+  OperationTypeP(input: char) -> OperationType {
+    string("query").map(|_| OperationType::Query)
+      .or(string("mutation").map(|_| OperationType::Mutation))
+      .parse_stream(input)
+  }
+);
 
 // pub fn operation_definition<I: U8Input>(i: I) -> SimpleResult<I,Definition>
 // {
@@ -290,10 +293,16 @@ make_parser!(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use combine::Parser;
+  use combine::{Parser,State};
 
   #[test]
   fn test_parse_comment() {
-    assert_eq!(LineComment::new().parse("#hello world\r\n").map(|x| x.0), Ok(()));
+    assert_eq!(LineComment::new().parse(State::new("#hello world\r\n")).map(|x| x.0), Ok(()));
+  }
+
+  #[test]
+  fn test_parse_operationtype() {
+    assert_eq!(OperationTypeP::new().parse(State::new("query")).map(|x| x.0), Ok(OperationType::Query));
+    assert_eq!(OperationTypeP::new().parse(State::new("mutation")).map(|x| x.0), Ok(OperationType::Mutation));
   }
 }
