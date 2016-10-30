@@ -177,13 +177,15 @@ pub fn name<I: U8Input>(i: I) -> SimpleResult<I,Name>
 
 pub fn alias<I: U8Input>(i: I) -> SimpleResult<I, Option<Name>>
 {
-  let parser = parse!{i;
-    let name = name();
+  let parser = |i: I| {
+      parse!{i;
+        let name = name();
 
-    either(white_space, line_terminator);
-    token(b':');
+        either(white_space, line_terminator);
+        token(b':');
 
-    ret Some(name)
+        ret Some(name)
+      }
   };
 
   option(i, parser, None)
