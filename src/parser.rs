@@ -1,13 +1,10 @@
 use std::collections::HashMap;
 
-use std::str::Chars;
-use std::iter::FromIterator;
 use std::marker::PhantomData;
 
-
-use combine::{Parser, ParseResult, Stream, parser};
-use combine::char::{CrLf, Tab, tab, char, crlf};
-use combine::combinator::{Many, FnParser, NoneOf, Skip, Or, Token, or, many, none_of};
+use combine::{Parser, ParseResult, Stream, value};
+use combine::char::{tab, char, crlf};
+use combine::combinator::{many, none_of};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -19,9 +16,9 @@ pub struct Document {
 
 #[derive(Debug,PartialEq)]
 pub enum Definition {
-  OperationDefinition(Operation),
-  SelectionSetDefinition(SelectionSet),
-  FragmentDefinition(Fragment),
+  Operation(Operation),
+  SelectionSet(SelectionSet),
+  Fragment(Fragment),
 }
 
 #[derive(Debug,PartialEq)]
@@ -64,22 +61,22 @@ type Variable = String;
 
 #[derive(Debug,PartialEq)]
 pub enum Type {
-  NamedType(Name),
-  ListType(Box<Type>),
-  NonNullType(Box<Type>),
+  Named(Name),
+  List(Box<Type>),
+  NonNull(Box<Type>),
 }
 
 #[derive(Debug,PartialEq)]
 pub enum Value {
-  Var(Variable),
-  IntValue(i32),
-  FloatValue(f32),
-  StringValue(String),
-  BooleanValue(bool),
-  NullValue,
-  EnumValue(String),
-  ListValue(Vec<Value>),
-  ObjectValue(HashMap<String, Value>),
+  Variable(Variable),
+  Int(i32),
+  Float(f32),
+  String(String),
+  Boolean(bool),
+  Null,
+  Enum(String),
+  List(Vec<Value>),
+  Object(HashMap<String, Value>),
 }
 
 #[derive(Debug,PartialEq)]
@@ -96,7 +93,7 @@ pub struct Argument {
 
 #[derive(Debug,PartialEq)]
 pub enum Selection {
-  FieldSelection(Field),
+  Field(Field),
   FragmentSpread(Name, Vec<Directive>),
   InlineFragment(Option<Type>, Vec<Directive>, SelectionSet),
 }
@@ -133,42 +130,6 @@ pub struct Fragment {
   type_condition: Type,
   directives: Vec<Directive>,
   selection_set: SelectionSet,
-}
-
-// ok wtf is going on here
-type WhiteSpace<I> = Or<Token<I>, Tab<I>>;
-pub fn white_space<I: Stream<Item = char>>() -> WhiteSpace<I> {
-  char(' ').or(tab())
-}
-
-// https://doc.rust-lang.org/error-index.html#E0207
-// struct LineTerminator<T> {
-//   phantom: PhantomData<T>,
-// }
-
-// impl<T> LineTerminator<T> {
-//   fn new() -> Self {
-//     LineTerminator {
-//       phantom: PhantomData
-//     }
-//   }
-// }
-
-
-macro_rules! make_parser_struct {
-  ($name: ident) => {
-    pub struct $name<T> {
-      phantom: PhantomData<T>,
-    }
-
-    impl<T> $name<T> {
-      fn new() -> Self {
-        $name {
-          phantom: PhantomData
-        }
-      }
-    }
-  }
 }
 
 macro_rules! make_parser {
@@ -234,98 +195,38 @@ macro_rules! make_parser {
     };
 }
 
-// make_parser_struct!(LineTerminator);
-
-// impl<I> Parser for LineTerminator<I> where I: Stream<Item=char> {
-//   type Input = I;
-//   type Output = char;
-
-//   fn parse_stream(&mut self, input: I) -> ParseResult<Self::Output, Self::Input> {
-//     crlf()
-//       .or(char('\r'))
-//       .or(char('\n'))
-//       .parse_stream(input)
-//   }
-// }
-
-// make_parser_struct!(Comment);
-
-// impl<I> Parser for Comment<I> where I: Stream<Item=char> {
-//   type Input = I;
-//   type Output = char;
-
-//   fn parse_stream(&mut self, input: I) -> ParseResult<Self::Output, Self::Input> {
-//     char('#')
-//       .skip(LineTerminator::new())
-//       .parse_stream(input)
-//   }
-// }
+make_parser!(
+  WhiteSpace(input: char) -> char {
+    char(' ').or(tab())
+      .parse_stream(input)
+  }
+);
 
 make_parser!(
   LineTerminator(input: char, is_clr: &bool) -> char {
 
     if !is_clr {
-      return char('\r')
+      char('\r')
         .or(char('\n'))
-        .parse_stream(input);
+        .parse_stream(input)
+    } else {
+      crlf()
+        .or(char('\r'))
+        .or(char('\n'))
+        .parse_stream(input)
     }
-
-    crlf()
-      .or(char('\r'))
-      .or(char('\n'))
-      .parse_stream(input)
   }
 );
 
 make_parser!(
-  Comment(input: char) -> char {
-    char('#')
+  LineComment(input: char) -> () {
+    value(())
+      .skip(char('#'))
+      .skip(many::<Vec<_>,_>(none_of("\r\n".chars())))
       .skip(LineTerminator::new(&true))
       .parse_stream(input)
   }
 );
-
-// TODO: combine definitions
-// make_parser!(
-//   LineTerminator(input: char) -> char {
-//     crlf()
-//       .or(char('\r'))
-//       .or(char('\n'))
-//       .parse_stream(input)
-//   }
-
-//   Comment(input: char) -> char {
-//     char('#')
-//       .skip(LineTerminator::new())
-//       .parse_stream(input)
-//   }
-// );
-
-
-
-// ok wtf is going on here
-// type LineTerminator<I> = Or<Or<CrLf<I>, Token<I>>, Token<I>>;
-// pub fn line_terminator<I: Stream<Item = char>>() -> impl Parser<Input=I> {
-//     crlf().or(char('\r')).or(char('\n'))
-// }
-
-
-// fn foo<I: Stream<Item = char>>(input: I) -> ParseResult<I::Item, I> {
-//   crlf().or(char('\r')).or(char('\n')).parse_stream(input)
-// }
-
-// ok wtf is going on here
-// type Comment<I> = Skip<Token<I>, LineTerminator<I>>;
-// pub fn comment<I: Stream<Item = char>>() -> impl Parser<Input=I>
-// {
-
-//   // let lol = line_terminator();
-
-//     char('#')
-//         // .skip(many(none_of("".chars())))
-//         .skip(LineTerminator::new())
-//         // .skip()
-// }
 
 // pub fn comma<I: U8Input>(i: I) -> SimpleResult<I,u8>
 // {
@@ -391,14 +292,8 @@ mod tests {
   use super::*;
   use combine::Parser;
 
-    #[test]
-    fn test_parse_comment() {
-      assert_eq!(Comment::new().parse("#\r\n").map(|x| x.0), Ok('#'));
-    }
-
   #[test]
-  fn test_operation_type() {}
-
-  #[test]
-  fn test_alias() {}
+  fn test_parse_comment() {
+    assert_eq!(LineComment::new().parse("#hello world\r\n").map(|x| x.0), Ok(()));
+  }
 }
