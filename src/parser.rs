@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use combine::{Parser, ParseResult, Stream, value};
-use combine::char::{tab, char, crlf, string};
-use combine::combinator::{many, none_of};
+use combine::char::{tab, char, crlf, string, letter, alpha_num};
+use combine::combinator::{many, none_of, or};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -140,13 +140,13 @@ macro_rules! make_parser {
     ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
 
       pub struct $name<T> {
-        phantom: PhantomData<T>,
+        _phantom: PhantomData<T>,
       }
 
       impl<T> $name<T> {
           pub fn new() -> Self {
               $name {
-                phantom: PhantomData
+                _phantom: PhantomData
               }
           }
       }
@@ -167,14 +167,14 @@ macro_rules! make_parser {
       -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
 
         pub struct $name<'a, T> {
-          phantom: PhantomData<T>,
+          _phantom: PhantomData<T>,
           $( $field: &'a $typ),*
         }
 
         impl<'a, T> $name<'a, T> {
           pub fn new($($field: &'a $typ),*) -> Self {
             $name {
-              phantom: PhantomData,
+              _phantom: PhantomData,
               $( $field: $field),*
             }
           }
@@ -185,7 +185,7 @@ macro_rules! make_parser {
           type Output = $output_type;
 
           fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
-            let &mut $name { phantom, $($field),* } = self;
+            let &mut $name { _phantom, $($field),* } = self;
 
             $($tmpl)*
           }
@@ -194,6 +194,11 @@ macro_rules! make_parser {
         make_parser!($($rest)*);
     };
 }
+
+// TODO graphql and char have a very differing set of code points
+// graphql :: [0009,000A,000D, [0020,FFFF] ]
+// char :: [0,D7FF] u [E000,10FFFF]
+// somehow we need to wrangle char to match the graphql types :)
 
 make_parser!(
   WhiteSpace(input: char) -> char {
@@ -236,6 +241,14 @@ make_parser!(
   }
 );
 
+make_parser!(
+  NameP(input: char) -> Name {
+    or(letter(),char('_'))
+      .with(many(alpha_num().or(char('_'))))
+      .parse_stream(input)
+  }
+);
+
 // pub fn operation_definition<I: U8Input>(i: I) -> SimpleResult<I,Definition>
 // {
 //   parse!{i;
@@ -246,30 +259,6 @@ make_parser!(
 //     ret {
 //       let op = Operation::new(op_type, name, Vec::new(), Vec::new());
 //       Definition::OperationDefinition(op)
-//     }
-//   }
-// }
-
-// pub fn operation_type<I: U8Input>(i: I) -> SimpleResult<I,OperationType>
-// {
-//   let op_type = |i,b,r| string(i,b).map(|_| r);
-//   parse!{i;
-//       op_type(b"query", OperationType::Query) <|>
-//       op_type(b"mutation", OperationType::Mutation)
-//   }
-// }
-
-// pub fn name<I: U8Input>(i: I) -> SimpleResult<I,Name>
-// {
-//   parse!{i;
-//     let start = satisfy(|c| is_alpha(c) || c == b'_');
-//     let rest = take_while(|c| is_alphanumeric(c) || c == b'_');
-
-//     ret {
-//       let mut start = String::from_utf8(vec![start]).unwrap();
-//       let rest = String::from_utf8(rest.to_vec()).unwrap();
-//       start.push_str(&rest);
-//       start
 //     }
 //   }
 // }
@@ -295,14 +284,25 @@ mod tests {
   use super::*;
   use combine::{Parser,State};
 
+  macro_rules! assert_sucessful_parse {
+    ($parser:ident,$input:expr,$result:expr) => {
+      assert_eq!($parser::new().parse(State::new($input)).map(|x| x.0), Ok($result));
+    }
+  }
+
   #[test]
   fn test_parse_comment() {
-    assert_eq!(LineComment::new().parse(State::new("#hello world\r\n")).map(|x| x.0), Ok(()));
+    assert_sucessful_parse!(LineComment, "#hello world\r\n", ());
   }
 
   #[test]
   fn test_parse_operationtype() {
-    assert_eq!(OperationTypeP::new().parse(State::new("query")).map(|x| x.0), Ok(OperationType::Query));
-    assert_eq!(OperationTypeP::new().parse(State::new("mutation")).map(|x| x.0), Ok(OperationType::Mutation));
+    assert_sucessful_parse!(OperationTypeP, "query", OperationType::Query);
+    assert_sucessful_parse!(OperationTypeP, "mutation", OperationType::Mutation);
+  }
+
+  #[test]
+  fn test_parse_name() {
+    assert_sucessful_parse!(NameP, "_asd", String::from("_asd"));
   }
 }
