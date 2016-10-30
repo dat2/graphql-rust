@@ -279,6 +279,23 @@ make_parser!(
   }
 );
 
+// TODO: combine definitions
+// make_parser!(
+//   LineTerminator(input: char) -> char {
+//     crlf()
+//       .or(char('\r'))
+//       .or(char('\n'))
+//       .parse_stream(input)
+//   }
+
+//   Comment(input: char) -> char {
+//     char('#')
+//       .skip(LineTerminator::new())
+//       .parse_stream(input)
+//   }
+// );
+
+
 
 // ok wtf is going on here
 // type LineTerminator<I> = Or<Or<CrLf<I>, Token<I>>, Token<I>>;
