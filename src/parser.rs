@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use std::str::Chars;
 use std::iter::FromIterator;
+use std::marker::PhantomData;
 
-use combine::{Parser, Stream};
+
+use combine::{Parser, ParseResult, Stream, parser};
 use combine::char::{CrLf, Tab, tab, char, crlf};
-use combine::combinator::{Many, NoneOf, Skip, Or, Token, or, many, none_of};
+use combine::combinator::{Many, FnParser, NoneOf, Skip, Or, Token, or, many, none_of};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -139,19 +141,191 @@ pub fn white_space<I: Stream<Item = char>>() -> WhiteSpace<I> {
   char(' ').or(tab())
 }
 
-// ok wtf is going on here
-type LineTerminator<I> = Or<Or<CrLf<I>, Token<I>>, Token<I>>;
-pub fn line_terminator<I: Stream<Item = char>>() -> LineTerminator<I> {
-  crlf().or(char('\r')).or(char('\n'))
+// https://doc.rust-lang.org/error-index.html#E0207
+// struct LineTerminator<T> {
+//   phantom: PhantomData<T>,
+// }
+
+// impl<T> LineTerminator<T> {
+//   fn new() -> Self {
+//     LineTerminator {
+//       phantom: PhantomData
+//     }
+//   }
+// }
+
+
+macro_rules! make_parser_struct {
+  ($name: ident) => {
+    pub struct $name<T> {
+      phantom: PhantomData<T>,
+    }
+
+    impl<T> $name<T> {
+      fn new() -> Self {
+        $name {
+          phantom: PhantomData
+        }
+      }
+    }
+  }
 }
 
-// ok wtf is going on here
-type Comment<I> = Skip<Token<I>, LineTerminator<I>>;
-pub fn comment<I: Stream<Item = char>>() -> Comment<I> {
-  char('#')
-        // .skip(many(none_of("".chars())))
-        .skip(line_terminator())
+macro_rules! make_parser {
+
+    // base case
+    () => {};
+
+    ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
+
+      pub struct $name<T> {
+        phantom: PhantomData<T>,
+      }
+
+      impl<T> $name<T> {
+          pub fn new() -> Self {
+              $name {
+                phantom: PhantomData
+              }
+          }
+      }
+
+      impl<I> Parser for $name<I> where I: Stream<Item=$input_item_type> {
+        type Input = I;
+        type Output = $output_type;
+
+        fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
+          $($tmpl)*
+        }
+      }
+
+      make_parser!($($rest)*);
+    };
+
+    ($name:ident ($input_var:ident : $input_item_type:ty , $($field:ident : &$typ:ty),*)
+      -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
+
+        pub struct $name<'a, T> {
+          phantom: PhantomData<T>,
+          $( $field: &'a $typ),*
+        }
+
+        impl<'a, T> $name<'a, T> {
+          pub fn new($($field: &'a $typ),*) -> Self {
+            $name {
+              phantom: PhantomData,
+              $( $field: $field),*
+            }
+          }
+        }
+
+        impl<'a, I> Parser for $name<'a, I> where I: Stream<Item=$input_item_type> {
+          type Input = I;
+          type Output = $output_type;
+
+          fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
+            let &mut $name { phantom, $($field),* } = self;
+
+            $($tmpl)*
+          }
+        }
+
+        make_parser!($($rest)*);
+    };
 }
+
+// make_parser_struct!(LineTerminator);
+
+// impl<I> Parser for LineTerminator<I> where I: Stream<Item=char> {
+//   type Input = I;
+//   type Output = char;
+
+//   fn parse_stream(&mut self, input: I) -> ParseResult<Self::Output, Self::Input> {
+//     crlf()
+//       .or(char('\r'))
+//       .or(char('\n'))
+//       .parse_stream(input)
+//   }
+// }
+
+// make_parser_struct!(Comment);
+
+// impl<I> Parser for Comment<I> where I: Stream<Item=char> {
+//   type Input = I;
+//   type Output = char;
+
+//   fn parse_stream(&mut self, input: I) -> ParseResult<Self::Output, Self::Input> {
+//     char('#')
+//       .skip(LineTerminator::new())
+//       .parse_stream(input)
+//   }
+// }
+
+make_parser!(
+  LineTerminator(input: char, is_clr: &bool) -> char {
+
+    if !is_clr {
+      return char('\r')
+        .or(char('\n'))
+        .parse_stream(input);
+    }
+
+    crlf()
+      .or(char('\r'))
+      .or(char('\n'))
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  Comment(input: char) -> char {
+    char('#')
+      .skip(LineTerminator::new(&true))
+      .parse_stream(input)
+  }
+);
+
+// TODO: combine definitions
+// make_parser!(
+//   LineTerminator(input: char) -> char {
+//     crlf()
+//       .or(char('\r'))
+//       .or(char('\n'))
+//       .parse_stream(input)
+//   }
+
+//   Comment(input: char) -> char {
+//     char('#')
+//       .skip(LineTerminator::new())
+//       .parse_stream(input)
+//   }
+// );
+
+
+
+// ok wtf is going on here
+// type LineTerminator<I> = Or<Or<CrLf<I>, Token<I>>, Token<I>>;
+// pub fn line_terminator<I: Stream<Item = char>>() -> impl Parser<Input=I> {
+//     crlf().or(char('\r')).or(char('\n'))
+// }
+
+
+// fn foo<I: Stream<Item = char>>(input: I) -> ParseResult<I::Item, I> {
+//   crlf().or(char('\r')).or(char('\n')).parse_stream(input)
+// }
+
+// ok wtf is going on here
+// type Comment<I> = Skip<Token<I>, LineTerminator<I>>;
+// pub fn comment<I: Stream<Item = char>>() -> impl Parser<Input=I>
+// {
+
+//   // let lol = line_terminator();
+
+//     char('#')
+//         // .skip(many(none_of("".chars())))
+//         .skip(LineTerminator::new())
+//         // .skip()
+// }
 
 // pub fn comma<I: U8Input>(i: I) -> SimpleResult<I,u8>
 // {
@@ -217,10 +391,10 @@ mod tests {
   use super::*;
   use combine::Parser;
 
-  #[test]
-  fn test_parse_comment() {
-    assert_eq!(comment().parse("#\r\n").map(|x| x.0), Ok('#'));
-  }
+    #[test]
+    fn test_parse_comment() {
+      assert_eq!(Comment::new().parse("#\r\n").map(|x| x.0), Ok('#'));
+    }
 
   #[test]
   fn test_operation_type() {}
