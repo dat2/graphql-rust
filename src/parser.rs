@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chomp::types::{Buffer, U8Input, ParseResult};
 use chomp::ascii::{is_alpha, is_alphanumeric};
 use chomp::parsers::{SimpleResult, Error, any, token, satisfy, string, take_while, skip_while};
-use chomp::combinators::{many_till, many, option, or};
+use chomp::combinators::{many_till, many, option, either, or};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -177,12 +177,16 @@ pub fn name<I: U8Input>(i: I) -> SimpleResult<I,Name>
 
 pub fn alias<I: U8Input>(i: I) -> SimpleResult<I, Option<Name>>
 {
-  // GRAMMAR:
-  // name [white_space<|>line_terminator] :
-  let parser: SimpleResult<I,Name> = parse!{i;
-    name() <* (white_space() <|> line_terminator()) <* token(b':')
+  let parser = parse!{i;
+    let name = name();
+
+    either(white_space, line_terminator);
+    token(b':');
+
+    ret Some(name)
   };
-  option(i, parser.map(Some), None)
+
+  option(i, parser, None)
 }
 
 #[cfg(test)]
