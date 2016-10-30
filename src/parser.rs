@@ -263,7 +263,14 @@ macro_rules! make_parser {
 // }
 
 make_parser!(
-  LineTerminator(input: char) -> char {
+  LineTerminator(input: char, is_clr: &bool) -> char {
+
+    if !is_clr {
+      return crlf()
+        .or(char('\r'))
+        .parse_stream(input);
+    }
+
     crlf()
       .or(char('\r'))
       .or(char('\n'))
@@ -274,7 +281,7 @@ make_parser!(
 make_parser!(
   Comment(input: char) -> char {
     char('#')
-      .skip(LineTerminator::new())
+      .skip(LineTerminator::new(&true))
       .parse_stream(input)
   }
 );
