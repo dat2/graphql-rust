@@ -259,36 +259,32 @@ make_parser!(
 );
 
 make_parser!(
-  Alias(input: char) -> Option<Name> {
-    optional(
-      NameP::new()
-        .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-        .skip(char(':'))
-    )
+  Alias(input: char) -> Name {
+    NameP::new()
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(char(':'))
       .parse_stream(input)
   }
 );
 
-// pub fn operation_definition<I: U8Input>(i: I) -> SimpleResult<I,Definition>
-// {
-//   parse!{i;
-//     let op_type = operation_type();
-//     white_space() <|> line_terminator();
-//     let name = option(|i| name(i).map(Some), None);
-
-//     ret {
-//       let op = Operation::new(op_type, name, Vec::new(), Vec::new());
-//       Definition::OperationDefinition(op)
-//     }
-//   }
-// }
+make_parser!(
+  OperationDefinition(input: char) -> Operation {
+    OperationTypeP::new()
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .and(optional(NameP::new()))
+      .map(|(op_type,name)| {
+        Operation::new(op_type, name, Vec::new(), Vec::new())
+      })
+      .parse_stream(input)
+  }
+);
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use combine::{Parser,State};
 
-  macro_rules! assert_sucessful_parse {
+  macro_rules! assert_successful_parse {
     ($parser:ident,$input:expr,$result:expr) => {
       assert_eq!($parser::new().parse(State::new($input)).map(|x| x.0), Ok($result));
     }
@@ -296,29 +292,43 @@ mod tests {
 
   #[test]
   fn test_parse_comment() {
-    assert_sucessful_parse!(LineComment, "#hello world\r\n", ());
+    assert_successful_parse!(LineComment, "#hello world\r\n", ());
   }
 
   #[test]
   fn test_parse_operationtype() {
-    assert_sucessful_parse!(OperationTypeP, "query", OperationType::Query);
-    assert_sucessful_parse!(OperationTypeP, "mutation", OperationType::Mutation);
+    assert_successful_parse!(OperationTypeP, "query", OperationType::Query);
+    assert_successful_parse!(OperationTypeP, "mutation", OperationType::Mutation);
   }
 
   #[test]
   fn test_parse_name() {
-    assert_sucessful_parse!(NameP, "_asd", String::from("_asd"));
-    assert_sucessful_parse!(NameP, "aasd", String::from("aasd"));
-    assert_sucessful_parse!(NameP, "zasd", String::from("zasd"));
-    assert_sucessful_parse!(NameP, "Aasd", String::from("Aasd"));
-    assert_sucessful_parse!(NameP, "Zasd", String::from("Zasd"));
+    assert_successful_parse!(NameP, "_asd", String::from("_asd"));
+    assert_successful_parse!(NameP, "aasd", String::from("aasd"));
+    assert_successful_parse!(NameP, "zasd", String::from("zasd"));
+    assert_successful_parse!(NameP, "Aasd", String::from("Aasd"));
+    assert_successful_parse!(NameP, "Zasd", String::from("Zasd"));
   }
 
   #[test]
   fn test_parse_alias() {
-    assert_sucessful_parse!(Alias, "asd:", Some(String::from("asd")));
-    assert_sucessful_parse!(Alias, "asd :", Some(String::from("asd")));
-    assert_sucessful_parse!(Alias, "asd \r\n:", Some(String::from("asd")));
-    // assert_sucessful_parse!(Alias, "asd", None);
+    assert_successful_parse!(Alias, "asd:", String::from("asd"));
+    assert_successful_parse!(Alias, "asd :", String::from("asd"));
+    assert_successful_parse!(Alias, "asd \r\n:", String::from("asd"));
+  }
+
+  #[test]
+  fn test_parse_operation() {
+    // named operation
+    {
+      let result = Operation::new(OperationType::Mutation, Some(String::from("test")), Vec::new(), Vec::new());
+      assert_successful_parse!(OperationDefinition, "mutation test", result);
+    }
+
+    // non named
+    {
+      let result = Operation::new(OperationType::Mutation, None, Vec::new(), Vec::new());
+      assert_successful_parse!(OperationDefinition, "mutation", result);
+    }
   }
 }
