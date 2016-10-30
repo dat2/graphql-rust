@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use std::marker::PhantomData;
 
-use combine::{Parser, ParseResult, Stream, value};
+use combine::{Parser, ParseResult, Stream};
 use combine::char::{tab, char, crlf, string, letter, alpha_num};
-use combine::combinator::{many, none_of, or};
+use combine::combinator::{many, none_of, or, optional, value};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -242,7 +242,7 @@ make_parser!(
 );
 
 make_parser!(
-  NameP(input: char) -> String {
+  NameP(input: char) -> Name {
     or(letter(),char('_'))
       .map(|c| {
         let mut result = String::new();
@@ -254,6 +254,17 @@ make_parser!(
         f.push_str(&r);
         f
       })
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  Alias(input: char) -> Option<Name> {
+    optional(
+      NameP::new()
+        .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+        .skip(char(':'))
+    )
       .parse_stream(input)
   }
 );
@@ -270,22 +281,6 @@ make_parser!(
 //       Definition::OperationDefinition(op)
 //     }
 //   }
-// }
-
-// pub fn alias<I: U8Input>(i: I) -> SimpleResult<I, Option<Name>>
-// {
-//   let parser = |i: I| {
-//       parse!{i;
-//         let name = name();
-
-//         either(white_space, line_terminator);
-//         token(b':');
-
-//         ret Some(name)
-//       }
-//   };
-
-//   option(i, parser, None)
 // }
 
 #[cfg(test)]
@@ -317,5 +312,13 @@ mod tests {
     assert_sucessful_parse!(NameP, "zasd", String::from("zasd"));
     assert_sucessful_parse!(NameP, "Aasd", String::from("Aasd"));
     assert_sucessful_parse!(NameP, "Zasd", String::from("Zasd"));
+  }
+
+  #[test]
+  fn test_parse_alias() {
+    assert_sucessful_parse!(Alias, "asd:", Some(String::from("asd")));
+    assert_sucessful_parse!(Alias, "asd :", Some(String::from("asd")));
+    assert_sucessful_parse!(Alias, "asd \r\n:", Some(String::from("asd")));
+    // assert_sucessful_parse!(Alias, "asd", None);
   }
 }
