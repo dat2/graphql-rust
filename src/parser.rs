@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use chomp::types::{Buffer, U8Input, ParseResult};
-use chomp::ascii::{is_alpha, is_alphanumeric};
-use chomp::parsers::{SimpleResult, Error, any, token, satisfy, string, take_while, skip_while};
-use chomp::combinators::{many_till, many, option, either, or};
+use std::marker::PhantomData;
+
+use combine::{Parser, ParseResult, Stream, value};
+use combine::char::{tab, char, crlf, string, letter, alpha_num};
+use combine::combinator::{many, none_of, or};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -15,9 +16,9 @@ pub struct Document {
 
 #[derive(Debug,PartialEq)]
 pub enum Definition {
-  OperationDefinition(Operation),
-  SelectionSetDefinition(SelectionSet),
-  FragmentDefinition(Fragment),
+  Operation(Operation),
+  SelectionSet(SelectionSet),
+  Fragment(Fragment),
 }
 
 #[derive(Debug,PartialEq)]
@@ -29,8 +30,17 @@ pub struct Operation {
 }
 
 impl Operation {
-  fn new(op_type: OperationType, name: Option<Name>, variable_definitions: Vec<VariableDefinition>, directives: Vec<Directive>) -> Operation {
-    Operation { op_type: op_type, name: name, variable_definitions: variable_definitions, directives: directives }
+  fn new(op_type: OperationType,
+         name: Option<Name>,
+         variable_definitions: Vec<VariableDefinition>,
+         directives: Vec<Directive>)
+         -> Operation {
+    Operation {
+      op_type: op_type,
+      name: name,
+      variable_definitions: variable_definitions,
+      directives: directives,
+    }
   }
 }
 
@@ -51,22 +61,22 @@ type Variable = String;
 
 #[derive(Debug,PartialEq)]
 pub enum Type {
-  NamedType(Name),
-  ListType(Box<Type>),
-  NonNullType(Box<Type>),
+  Named(Name),
+  List(Box<Type>),
+  NonNull(Box<Type>),
 }
 
 #[derive(Debug,PartialEq)]
 pub enum Value {
-  Var(Variable),
-  IntValue(i32),
-  FloatValue(f32),
-  StringValue(String),
-  BooleanValue(bool),
-  NullValue,
-  EnumValue(String),
-  ListValue(Vec<Value>),
-  ObjectValue(HashMap<String, Value>),
+  Variable(Variable),
+  Int(i32),
+  Float(f32),
+  String(String),
+  Boolean(bool),
+  Null,
+  Enum(String),
+  List(Vec<Value>),
+  Object(HashMap<String, Value>),
 }
 
 #[derive(Debug,PartialEq)]
@@ -83,7 +93,7 @@ pub struct Argument {
 
 #[derive(Debug,PartialEq)]
 pub enum Selection {
-  FieldSelection(Field),
+  Field(Field),
   FragmentSpread(Name, Vec<Directive>),
   InlineFragment(Option<Type>, Vec<Directive>, SelectionSet),
 }
@@ -98,8 +108,19 @@ pub struct Field {
 }
 
 impl Field {
-  fn new(alias: Option<Name>, name: Name, arguments: Vec<Argument>, directives: Vec<Directive>, selection_set: SelectionSet) -> Field {
-    Field { alias: alias, name: name, arguments: arguments, directives: directives, selection_set: selection_set }
+  fn new(alias: Option<Name>,
+         name: Name,
+         arguments: Vec<Argument>,
+         directives: Vec<Directive>,
+         selection_set: SelectionSet)
+         -> Field {
+    Field {
+      alias: alias,
+      name: name,
+      arguments: arguments,
+      directives: directives,
+      selection_set: selection_set,
+    }
   }
 }
 
@@ -111,102 +132,190 @@ pub struct Fragment {
   selection_set: SelectionSet,
 }
 
-pub fn white_space<I: U8Input>(i: I) -> SimpleResult<I, ()>
-{
-  skip_while(i, |c| c == b' ' || c == b'\t')
-}
+macro_rules! make_parser {
 
-pub fn line_terminator<I: U8Input>(i: I) -> SimpleResult<I, ()>
-{
-  parse!{i;
-    string(b"\r\n") <|> string(b"\r") <|> string(b"\n") >> ret ()
-  }
-}
+    // base case
+    () => {};
 
-pub fn comment<I: U8Input>(i: I) -> SimpleResult<I, ()>
-{
-  parse!{i;
-    token(b'#');
-    let _rest: Vec<_> = many_till(any, line_terminator);
-    ret ()
-  }
-}
+    ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
 
-pub fn comma<I: U8Input>(i: I) -> SimpleResult<I,u8>
-{
-  token(i, b',')
-}
-
-pub fn operation_definition<I: U8Input>(i: I) -> SimpleResult<I,Definition>
-{
-  parse!{i;
-    let op_type = operation_type();
-    white_space() <|> line_terminator();
-    let name = option(|i| name(i).map(Some), None);
-
-    ret {
-      let op = Operation::new(op_type, name, Vec::new(), Vec::new());
-      Definition::OperationDefinition(op)
-    }
-  }
-}
-
-pub fn operation_type<I: U8Input>(i: I) -> SimpleResult<I,OperationType>
-{
-  let op_type = |i,b,r| string(i,b).map(|_| r);
-  parse!{i;
-      op_type(b"query", OperationType::Query) <|>
-      op_type(b"mutation", OperationType::Mutation)
-  }
-}
-
-pub fn name<I: U8Input>(i: I) -> SimpleResult<I,Name>
-{
-  parse!{i;
-    let start = satisfy(|c| is_alpha(c) || c == b'_');
-    let rest = take_while(|c| is_alphanumeric(c) || c == b'_');
-
-    ret {
-      let mut start = String::from_utf8(vec![start]).unwrap();
-      let rest = String::from_utf8(rest.to_vec()).unwrap();
-      start.push_str(&rest);
-      start
-    }
-  }
-}
-
-pub fn alias<I: U8Input>(i: I) -> SimpleResult<I, Option<Name>>
-{
-  let parser = |i: I| {
-      parse!{i;
-        let name = name();
-
-        either(white_space, line_terminator);
-        token(b':');
-
-        ret Some(name)
+      pub struct $name<T> {
+        _phantom: PhantomData<T>,
       }
-  };
 
-  option(i, parser, None)
+      impl<T> $name<T> {
+          pub fn new() -> Self {
+              $name {
+                _phantom: PhantomData
+              }
+          }
+      }
+
+      impl<I> Parser for $name<I> where I: Stream<Item=$input_item_type> {
+        type Input = I;
+        type Output = $output_type;
+
+        fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
+          $($tmpl)*
+        }
+      }
+
+      make_parser!($($rest)*);
+    };
+
+    ($name:ident ($input_var:ident : $input_item_type:ty , $($field:ident : &$typ:ty),*)
+      -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
+
+        pub struct $name<'a, T> {
+          _phantom: PhantomData<T>,
+          $( $field: &'a $typ),*
+        }
+
+        impl<'a, T> $name<'a, T> {
+          pub fn new($($field: &'a $typ),*) -> Self {
+            $name {
+              _phantom: PhantomData,
+              $( $field: $field),*
+            }
+          }
+        }
+
+        impl<'a, I> Parser for $name<'a, I> where I: Stream<Item=$input_item_type> {
+          type Input = I;
+          type Output = $output_type;
+
+          fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
+            let &mut $name { _phantom, $($field),* } = self;
+
+            $($tmpl)*
+          }
+        }
+
+        make_parser!($($rest)*);
+    };
 }
+
+// TODO graphql and char have a very differing set of code points
+// graphql :: [0009,000A,000D, [0020,FFFF] ]
+// char :: [0,D7FF] u [E000,10FFFF]
+// somehow we need to wrangle char to match the graphql types :)
+
+make_parser!(
+  WhiteSpace(input: char) -> char {
+    char(' ').or(tab())
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  LineTerminator(input: char, is_clr: &bool) -> char {
+
+    if !is_clr {
+      char('\r')
+        .or(char('\n'))
+        .parse_stream(input)
+    } else {
+      crlf()
+        .or(char('\r'))
+        .or(char('\n'))
+        .parse_stream(input)
+    }
+  }
+);
+
+make_parser!(
+  LineComment(input: char) -> () {
+    value(())
+      .skip(char('#'))
+      .skip(many::<Vec<_>,_>(none_of("\r\n".chars())))
+      .skip(LineTerminator::new(&true))
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  OperationTypeP(input: char) -> OperationType {
+    string("query").map(|_| OperationType::Query)
+      .or(string("mutation").map(|_| OperationType::Mutation))
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  NameP(input: char) -> String {
+    or(letter(),char('_'))
+      .map(|c| {
+        let mut result = String::new();
+        result.push(c);
+        result
+      })
+      .and(many::<String,_>(alpha_num().or(char('_'))))
+      .map(|(mut f,r)| {
+        f.push_str(&r);
+        f
+      })
+      .parse_stream(input)
+  }
+);
+
+// pub fn operation_definition<I: U8Input>(i: I) -> SimpleResult<I,Definition>
+// {
+//   parse!{i;
+//     let op_type = operation_type();
+//     white_space() <|> line_terminator();
+//     let name = option(|i| name(i).map(Some), None);
+
+//     ret {
+//       let op = Operation::new(op_type, name, Vec::new(), Vec::new());
+//       Definition::OperationDefinition(op)
+//     }
+//   }
+// }
+
+// pub fn alias<I: U8Input>(i: I) -> SimpleResult<I, Option<Name>>
+// {
+//   let parser = |i: I| {
+//       parse!{i;
+//         let name = name();
+
+//         either(white_space, line_terminator);
+//         token(b':');
+
+//         ret Some(name)
+//       }
+//   };
+
+//   option(i, parser, None)
+// }
 
 #[cfg(test)]
 mod tests {
-  // use super::{OperationType, Operation, Definition white_space, line_terminator, comment, comma, operation_type, name, operation_definition};
   use super::*;
-  use chomp::prelude::parse_only;
+  use combine::{Parser,State};
 
-  #[test]
-  fn test_parse_comment() {
-    assert_eq!(parse_only(comment, b"#test\r"), Ok(()));
-    assert_eq!(parse_only(comment, b"#test\n"), Ok(()));
-    assert_eq!(parse_only(comment, b"#test\r\n"), Ok(()));
+  macro_rules! assert_sucessful_parse {
+    ($parser:ident,$input:expr,$result:expr) => {
+      assert_eq!($parser::new().parse(State::new($input)).map(|x| x.0), Ok($result));
+    }
   }
 
   #[test]
-  fn test_operation_type() {
-    assert_eq!(parse_only(operation_type, b"query"), Ok(OperationType::Query));
-    assert_eq!(parse_only(operation_type, b"mutation"), Ok(OperationType::Mutation));
+  fn test_parse_comment() {
+    assert_sucessful_parse!(LineComment, "#hello world\r\n", ());
+  }
+
+  #[test]
+  fn test_parse_operationtype() {
+    assert_sucessful_parse!(OperationTypeP, "query", OperationType::Query);
+    assert_sucessful_parse!(OperationTypeP, "mutation", OperationType::Mutation);
+  }
+
+  #[test]
+  fn test_parse_name() {
+    assert_sucessful_parse!(NameP, "_asd", String::from("_asd"));
+    assert_sucessful_parse!(NameP, "aasd", String::from("aasd"));
+    assert_sucessful_parse!(NameP, "zasd", String::from("zasd"));
+    assert_sucessful_parse!(NameP, "Aasd", String::from("Aasd"));
+    assert_sucessful_parse!(NameP, "Zasd", String::from("Zasd"));
   }
 }

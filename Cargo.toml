@@ -5,3 +5,4 @@ authors = ["Nicholas Dujay <nickdujay@gmail.com>"]
 
 [dependencies]
 chomp = "*"
+combine ="*"
