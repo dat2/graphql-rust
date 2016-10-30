@@ -266,8 +266,8 @@ make_parser!(
   LineTerminator(input: char, is_clr: &bool) -> char {
 
     if !is_clr {
-      return crlf()
-        .or(char('\r'))
+      return char('\r')
+        .or(char('\n'))
         .parse_stream(input);
     }
 
