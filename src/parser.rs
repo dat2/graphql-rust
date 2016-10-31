@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use combine::{Parser, ParseResult, Stream};
 use combine::char::{tab, char, crlf, string, letter, alpha_num, digit};
-use combine::combinator::{between, many, none_of, one_of, or, optional, value};
+use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -368,7 +368,7 @@ make_parser!(
 );
 
 make_parser!(
-  IntValue(input: char) -> Value {
+  IntPart(input: char) -> (Option<char>,String) {
     optional(char('-'))
       .and(
         or(
@@ -386,15 +386,78 @@ make_parser!(
               result
             })
         )
-        .map(|number| number.parse::<i32>().unwrap())
       )
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  IntValue(input: char) -> Value {
+    IntPart::new()
       .map(|(neg,number)| {
         match neg {
-          Some(_) => -number,
-          None => number
+          Some(_) => -number.parse::<i32>().unwrap(),
+          None => number.parse::<i32>().unwrap()
         }
       })
       .map(Value::Int)
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  FloatValue(input: char) -> Value {
+    IntPart::new()
+      .and(
+        optional(char('.')
+          .and(many1::<String,_>(digit()))
+          .map(|(c,s)| {
+            let mut result = String::new();
+            result.push(c);
+            result.push_str(&s);
+            result
+          }))
+        )
+      .and(optional(
+        char('e').or(char('E'))
+          .and(optional(char('+').or(char('-'))))
+          .and(many1::<String,_>(digit()))
+          .map(|((indicator,opt_sign),digits)| {
+            let mut result = String::new();
+            result.push(indicator);
+            if let Some(sign) = opt_sign {
+              result.push(sign);
+            }
+            result.push_str(&digits);
+            result
+          })
+      ))
+      .map(|(((opt_sign,int_part),opt_fract_part),opt_exp_part)| {
+        let mut result = String::new();
+        if let Some(sign) = opt_sign {
+          result.push(sign);
+        }
+        result.push_str(&int_part);
+
+        match opt_fract_part {
+          Some(fract_part) => {
+            result.push_str(&fract_part);
+
+            if let Some(exp_part) = opt_exp_part {
+              result.push_str(&exp_part);
+            }
+          },
+          None => {
+            // to make rust parse it correctly, it needs to have a fractional number before the exponent part
+            if let Some(exp_part) = opt_exp_part {
+              result.push_str(".0");
+              result.push_str(&exp_part);
+            }
+          }
+        }
+        result.parse::<f32>().unwrap()
+      })
+      .map(Value::Float)
       .parse_stream(input)
   }
 );
@@ -501,12 +564,30 @@ mod tests {
   }
 
   #[test]
-  fn test_parse_value() {
+  fn test_parse_intvalue() {
     assert_successful_parse!(IntValue, "0", Value::Int(0));
     assert_successful_parse!(IntValue, "-0", Value::Int(0));
     assert_successful_parse!(IntValue, "1", Value::Int(1));
     assert_successful_parse!(IntValue, "-1", Value::Int(-1));
     assert_successful_parse!(IntValue, "10", Value::Int(10));
     assert_successful_parse!(IntValue, "-10", Value::Int(-10));
+  }
+
+  #[test]
+  fn test_parse_floatvalue() {
+    // test .
+    assert_successful_parse!(FloatValue, "0.1", Value::Float(0.1));
+
+    // test optional fract_part
+    assert_successful_parse!(FloatValue, "10e1", Value::Float(10.0e1));
+    assert_successful_parse!(FloatValue, "10.0e1", Value::Float(10.0e1));
+
+    // test case e
+    assert_successful_parse!(FloatValue, "10E1", Value::Float(10.0e1));
+    assert_successful_parse!(FloatValue, "10.0E1", Value::Float(10.0e1));
+
+    // test signs
+    assert_successful_parse!(FloatValue, "10e+1", Value::Float(10.0e1));
+    assert_successful_parse!(FloatValue, "10.0e-1", Value::Float(10.0e-1));
   }
 }
