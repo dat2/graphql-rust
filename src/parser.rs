@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use std::marker::PhantomData;
 
-use combine::{Parser, ParseResult, Stream};
+use combine::{Parser, ConsumedResult, Stream};
 use combine::char::{tab, char, crlf, string, letter, alpha_num, digit};
-use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value};
+use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value, try};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -149,7 +149,7 @@ macro_rules! make_parser {
     // base case
     () => {};
 
-    ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
+    ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty { $($tmpl:tt)+ } $($rest:tt)*) => {
 
       #[derive(Clone)]
       #[allow(missing_docs)]
@@ -170,8 +170,8 @@ macro_rules! make_parser {
         type Input = I;
         type Output = $output_type;
 
-        fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
-          $($tmpl)*
+        fn parse_lazy(&mut self, $input_var: I) -> ConsumedResult<Self::Output, Self::Input> {
+          $($tmpl)+
         }
       }
 
@@ -179,7 +179,7 @@ macro_rules! make_parser {
     };
 
     ($name:ident ($input_var:ident : $input_item_type:ty , $($field:ident : &$typ:ty),*)
-      -> $output_type:ty { $($tmpl:tt)* } $($rest:tt)*) => {
+      -> $output_type:ty { $($tmpl:tt)+ } $($rest:tt)*) => {
 
         #[derive(Clone)]
         #[allow(missing_docs)]
@@ -202,10 +202,9 @@ macro_rules! make_parser {
           type Input = I;
           type Output = $output_type;
 
-          fn parse_stream(&mut self, $input_var: I) -> ParseResult<Self::Output, Self::Input> {
+          fn parse_lazy(&mut self, $input_var: I) -> ConsumedResult<Self::Output, Self::Input> {
             let &mut $name { _phantom, $($field),* } = self;
-
-            $($tmpl)*
+            $($tmpl)+
           }
         }
 
@@ -221,22 +220,25 @@ macro_rules! make_parser {
 make_parser!(
   WhiteSpace(input: char) -> char {
     char(' ').or(tab())
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
 make_parser!(
   LineTerminator(input: char, is_clr: &bool) -> char {
 
+    let cr = char('\r');
+    let lf = char('\n');
+
     if !is_clr {
-      char('\r')
-        .or(char('\n'))
-        .parse_stream(input)
+      cr.clone()
+        .or(lf)
+        .parse_lazy(input)
     } else {
       crlf()
-        .or(char('\r'))
-        .or(char('\n'))
-        .parse_stream(input)
+        .or(cr)
+        .or(lf)
+        .parse_lazy(input)
     }
   }
 );
@@ -247,7 +249,7 @@ make_parser!(
       .skip(char('#'))
       .skip(many::<Vec<_>,_>(none_of("\r\n".chars())))
       .skip(LineTerminator::new(&true))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
@@ -265,7 +267,7 @@ make_parser!(
         Operation::new(op_type, name, variable_definitions, Vec::new())
       })
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
@@ -274,7 +276,7 @@ make_parser!(
     string("query").map(|_| OperationType::Query)
       .or(string("mutation").map(|_| OperationType::Mutation))
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
@@ -292,14 +294,14 @@ make_parser!(
         f
       })
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
 make_parser!(
   VariableDefinitions(input: char) -> Vec<VariableDefinition> {
     between(char('('), char(')'), many(VariableDefinitionParser::new()))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
@@ -314,7 +316,7 @@ make_parser!(
         VariableDefinition::new(variable, var_type, opt_type)
       })
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
@@ -322,26 +324,40 @@ make_parser!(
   VariableParser(input: char) -> Variable {
     char('$')
       .with(NameParser::new()) // skip the $
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
 make_parser!(
   TypeParser(input: char) -> Type {
-    let named_type = NameParser::new().map(Type::Named);
-    let list_type = between(char('['),char(']'), TypeParser::new()).map(|t| Type::List(Box::new(t)));
-
-// TODO i can't clone for some reason -.-
-    let non_null_type = char('!')
-      .with(or(
-        NameParser::new().map(Type::Named),
-        between(char('['),char(']'), TypeParser::new()).map(|t| Type::List(Box::new(t)))
-      ))
-      .map(|t| Type::NonNull(Box::new(t)));
-
-    non_null_type.or(named_type).or(list_type)
+    NonNullType::new().or(NamedType::new()).or(ListType::new())
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_stream(input)
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  NamedType(input: char) -> Type {
+    NameParser::new()
+      .map(Type::Named)
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  ListType(input: char) -> Type {
+    between(char('['),char(']'), TypeParser::new())
+      .map(|t| Type::List(Box::new(t)))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  NonNullType(input: char) -> Type {
+    char('!')
+      .with(NamedType::new().or(ListType::new()))
+      .map(|t| Type::NonNull(Box::new(t)))
+      .parse_lazy(input)
   }
 );
 
@@ -350,19 +366,23 @@ make_parser!(
     char('=')
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .with(ValueParser::new(&false))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
 make_parser!(
   ValueParser(input: char, variable: &bool) -> Value {
 
-    let mut constants = IntValue::new();
+    let mut constants = try(FloatValue::new())
+      .or(IntValue::new());
 
     if *variable {
-      VariableParser::new().with(constants).parse_stream(input)
+      VariableParser::new()
+        .map(Value::Variable)
+        .or(constants)
+        .parse_lazy(input)
     } else {
-      constants.parse_stream(input)
+      constants.parse_lazy(input)
     }
   }
 );
@@ -372,22 +392,17 @@ make_parser!(
     optional(char('-'))
       .and(
         or(
-          char('0').map(|c| {
-            let mut result = String::new();
-            result.push(c);
-            result
-          }),
+          char('0').map(|c: char| c.to_string()),
           one_of("123456789".chars())
+            .map(|c: char| c.to_string())
             .and(many::<String,_>(digit()))
-            .map(|(c,rest)| {
-              let mut result = String::new();
-              result.push(c);
-              result.push_str(&rest);
-              result
+            .map(|(mut begin,rest)| {
+              begin.push_str(&rest);
+              begin
             })
         )
       )
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
@@ -401,48 +416,41 @@ make_parser!(
         }
       })
       .map(Value::Int)
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
 
 make_parser!(
   FloatValue(input: char) -> Value {
     IntPart::new()
-      .and(
-        optional(char('.')
-          .and(many1::<String,_>(digit()))
-          .map(|(c,s)| {
-            let mut result = String::new();
-            result.push(c);
-            result.push_str(&s);
-            result
-          }))
-        )
-      .and(optional(
-        char('e').or(char('E'))
-          .and(optional(char('+').or(char('-'))))
-          .and(many1::<String,_>(digit()))
-          .map(|((indicator,opt_sign),digits)| {
-            let mut result = String::new();
-            result.push(indicator);
-            if let Some(sign) = opt_sign {
-              result.push(sign);
-            }
-            result.push_str(&digits);
-            result
-          })
-      ))
-      .map(|(((opt_sign,int_part),opt_fract_part),opt_exp_part)| {
+      .map(|(opt_sign, int_part)| {
         let mut result = String::new();
         if let Some(sign) = opt_sign {
           result.push(sign);
         }
         result.push_str(&int_part);
+        result
+      })
+      .and(
+        // FractionalPart ExponentialPart
+        try(FractionalPart::new().map(Some).and(ExponentialPart::new().map(Some)))
+          // FractionalPart
+          .or(FractionalPart::new().map(Some).and(value(None)))
+          // ExponentialPart
+          .or(value(None).and(ExponentialPart::new().map(Some)))
+      )
+      .map(|(int_part,(opt_fract_part, opt_exp_part)) : (String, (Option<String>,Option<String>))| {
+        let mut result = String::new();
+        result.push_str(&int_part);
+
+        println!("{:?} {:?} {:?}", int_part, opt_fract_part, opt_exp_part);
 
         match opt_fract_part {
           Some(fract_part) => {
+            // add the fractional part first
             result.push_str(&fract_part);
 
+            // if exponential part is there, we can just add it
             if let Some(exp_part) = opt_exp_part {
               result.push_str(&exp_part);
             }
@@ -455,10 +463,41 @@ make_parser!(
             }
           }
         }
+        // finally let rust parse it
         result.parse::<f32>().unwrap()
       })
       .map(Value::Float)
-      .parse_stream(input)
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  FractionalPart(input: char) -> String {
+    char('.').map(|c: char| c.to_string())
+      .and(many1::<String,_>(digit()))
+      .map(|(mut result,s)| {
+        result.push_str(&s);
+        result
+      })
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  ExponentialPart(input: char) -> String {
+    char('e').or(char('E'))
+      .and(optional(char('+').or(char('-'))))
+      .and(many1::<String,_>(digit()))
+      .map(|((indicator,opt_sign),digits)| {
+        let mut result = String::new();
+        result.push(indicator);
+        if let Some(sign) = opt_sign {
+          result.push(sign);
+        }
+        result.push_str(&digits);
+        result
+      })
+      .parse_lazy(input)
   }
 );
 
@@ -467,18 +506,19 @@ make_parser!(
     NameParser::new()
       .skip(char(':'))
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_stream(input)
+      .parse_lazy(input)
   }
 );
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use combine::{State, Parser};
 
   macro_rules! assert_successful_parse {
-    ($parser:ident,$input:expr,$result:expr) => {
-      assert_eq!($parser::new().parse(State::new($input)).map(|x| x.0), Ok($result));
+    ($parser:ident,$input:expr,$expected:expr) => {
+      let result = $parser::new().parse(State::new($input)).map(|x| x.0);
+      println!("Input({:?}) Result({:?}) Expected(Ok({:?}))", $input, result, $expected);
+      assert_eq!(result, Ok($expected))
     }
   }
 
@@ -561,6 +601,12 @@ mod tests {
                              VariableDefinition::new(String::from("devicePicSize"),
                                                      Type::Named(String::from("Int")),
                                                      Some(Value::Int(10))));
+
+    assert_successful_parse!(VariableDefinitionParser,
+                             "$devicePicSize: Float = 1.0",
+                             VariableDefinition::new(String::from("devicePicSize"),
+                                                     Type::Named(String::from("Float")),
+                                                     Some(Value::Float(1.0))));
   }
 
   #[test]
