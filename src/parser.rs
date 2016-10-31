@@ -253,7 +253,7 @@ make_parser!(
 
 make_parser!(
   OperationDefinition(input: char) -> Operation {
-    OperationTypeParserarser::new()
+    OperationTypeParser::new()
       .and(optional(NameParser::new()))
       .and(optional(VariableDefinitions::new()))
       .map(|((op_type,name),defns)| {
@@ -264,12 +264,13 @@ make_parser!(
 
         Operation::new(op_type, name, variable_definitions, Vec::new())
       })
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_stream(input)
   }
 );
 
 make_parser!(
-  OperationTypeParserarser(input: char) -> OperationType {
+  OperationTypeParser(input: char) -> OperationType {
     string("query").map(|_| OperationType::Query)
       .or(string("mutation").map(|_| OperationType::Mutation))
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
@@ -297,18 +298,21 @@ make_parser!(
 
 make_parser!(
   VariableDefinitions(input: char) -> Vec<VariableDefinition> {
-    between(char('('), char(')'), many(VariableDefinitionP::new()))
+    between(char('('), char(')'), many(VariableDefinitionParser::new()))
       .parse_stream(input)
   }
 );
 
 make_parser!(
-  VariableDefinitionP(input: char) -> VariableDefinition {
+  VariableDefinitionParser(input: char) -> VariableDefinition {
     VariableParser::new()
+      .skip(char(':'))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .and(TypeParser::new())
       .map(|(variable,var_type)| {
         VariableDefinition::new(variable, var_type, None)
       })
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_stream(input)
   }
 );
@@ -343,8 +347,8 @@ make_parser!(
 make_parser!(
   Alias(input: char) -> Name {
     NameParser::new()
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .skip(char(':'))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_stream(input)
   }
 );
@@ -367,10 +371,8 @@ mod tests {
 
   #[test]
   fn test_parse_operationtype() {
-    assert_successful_parse!(OperationTypeParserarser, "query", OperationType::Query);
-    assert_successful_parse!(OperationTypeParserarser,
-                             "mutation",
-                             OperationType::Mutation);
+    assert_successful_parse!(OperationTypeParser, "query", OperationType::Query);
+    assert_successful_parse!(OperationTypeParser, "mutation", OperationType::Mutation);
   }
 
   #[test]
@@ -423,5 +425,12 @@ mod tests {
     assert_successful_parse!(TypeParser,
                              "![User]",
                              Type::NonNull(Box::new(Type::List(Box::new(Type::Named(String::from("User")))))));
+  }
+
+  #[test]
+  fn test_parse_variabledefinition_nodefaultvalue() {
+    assert_successful_parse!(VariableDefinitionParser,
+                             "$devicePicSize: Int",
+                             VariableDefinition::new(String::from("devicePicSize"), Type::Named(String::from("Int")), None));
   }
 }
