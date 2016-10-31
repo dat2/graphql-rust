@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use combine::{Parser, ParseResult, Stream};
-use combine::char::{tab, char, crlf, string, letter, alpha_num};
-use combine::combinator::{between, many, none_of, or, optional, value};
+use combine::char::{tab, char, crlf, string, letter, alpha_num, digit};
+use combine::combinator::{between, many, none_of, one_of, or, optional, value};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -309,8 +309,9 @@ make_parser!(
       .skip(char(':'))
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .and(TypeParser::new())
-      .map(|(variable,var_type)| {
-        VariableDefinition::new(variable, var_type, None)
+      .and(optional(DefaultValue::new()))
+      .map(|((variable,var_type),opt_type)| {
+        VariableDefinition::new(variable, var_type, opt_type)
       })
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_stream(input)
@@ -330,7 +331,7 @@ make_parser!(
     let named_type = NameParser::new().map(Type::Named);
     let list_type = between(char('['),char(']'), TypeParser::new()).map(|t| Type::List(Box::new(t)));
 
-// i can't clone for some reason -.-
+// TODO i can't clone for some reason -.-
     let non_null_type = char('!')
       .with(or(
         NameParser::new().map(Type::Named),
@@ -340,6 +341,60 @@ make_parser!(
 
     non_null_type.or(named_type).or(list_type)
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  DefaultValue(input: char) -> Value {
+    char('=')
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .with(ValueParser::new(&false))
+      .parse_stream(input)
+  }
+);
+
+make_parser!(
+  ValueParser(input: char, variable: &bool) -> Value {
+
+    let mut constants = IntValue::new();
+
+    if *variable {
+      VariableParser::new().with(constants).parse_stream(input)
+    } else {
+      constants.parse_stream(input)
+    }
+  }
+);
+
+make_parser!(
+  IntValue(input: char) -> Value {
+    optional(char('-'))
+      .and(
+        or(
+          char('0').map(|c| {
+            let mut result = String::new();
+            result.push(c);
+            result
+          }),
+          one_of("123456789".chars())
+            .and(many::<String,_>(digit()))
+            .map(|(c,rest)| {
+              let mut result = String::new();
+              result.push(c);
+              result.push_str(&rest);
+              result
+            })
+        )
+        .map(|number| number.parse::<i32>().unwrap())
+      )
+      .map(|(neg,number)| {
+        match neg {
+          Some(_) => -number,
+          None => number
+        }
+      })
+      .map(Value::Int)
       .parse_stream(input)
   }
 );
@@ -431,6 +486,27 @@ mod tests {
   fn test_parse_variabledefinition_nodefaultvalue() {
     assert_successful_parse!(VariableDefinitionParser,
                              "$devicePicSize: Int",
-                             VariableDefinition::new(String::from("devicePicSize"), Type::Named(String::from("Int")), None));
+                             VariableDefinition::new(String::from("devicePicSize"),
+                                                     Type::Named(String::from("Int")),
+                                                     None));
+  }
+
+  #[test]
+  fn test_parse_variabledefinition_defaultvalue() {
+    assert_successful_parse!(VariableDefinitionParser,
+                             "$devicePicSize: Int = 10",
+                             VariableDefinition::new(String::from("devicePicSize"),
+                                                     Type::Named(String::from("Int")),
+                                                     Some(Value::Int(10))));
+  }
+
+  #[test]
+  fn test_parse_value() {
+    assert_successful_parse!(IntValue, "0", Value::Int(0));
+    assert_successful_parse!(IntValue, "-0", Value::Int(0));
+    assert_successful_parse!(IntValue, "1", Value::Int(1));
+    assert_successful_parse!(IntValue, "-1", Value::Int(-1));
+    assert_successful_parse!(IntValue, "10", Value::Int(10));
+    assert_successful_parse!(IntValue, "-10", Value::Int(-10));
   }
 }
