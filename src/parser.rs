@@ -371,12 +371,17 @@ make_parser!(
 );
 
 make_parser!(
-  ValueParser(input: char, variable: &bool) -> Value {
+  ValueParser(input: char, constant: &bool) -> Value {
 
     let mut constants = try(FloatValue::new())
-      .or(IntValue::new());
+      .or(IntValue::new())
+      .or(BooleanValue::new())
+      .or(NullValue::new())
+      //.or(EnumValue::new())
+      .or(ListValue::new(constant))
+      .or(ObjectValue::new(constant));
 
-    if *variable {
+    if *constant {
       VariableParser::new()
         .map(Value::Variable)
         .or(constants)
@@ -416,6 +421,7 @@ make_parser!(
         }
       })
       .map(Value::Int)
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_lazy(input)
   }
 );
@@ -467,6 +473,7 @@ make_parser!(
         result.parse::<f32>().unwrap()
       })
       .map(Value::Float)
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_lazy(input)
   }
 );
@@ -502,6 +509,66 @@ make_parser!(
 );
 
 make_parser!(
+  BooleanValue(input: char) -> Value {
+    string("true").map(|_| Value::Boolean(true))
+      .or(string("false").map(|_| Value::Boolean(false)))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  NullValue(input: char) -> Value {
+    string("null")
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .map(|_| Value::Null)
+      .parse_lazy(input)
+  }
+);
+
+// TODO enum parser: Name but not true or false or null
+
+make_parser!(
+  ListValue(input: char, constant: &bool) -> Value {
+    between(char('['), char(']'), many(ValueParser::new(constant)))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .map(Value::List)
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  ObjectField(input: char, constant: &bool) -> (String, Value) {
+    NameParser::new()
+      .skip(char(':'))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .and(ValueParser::new(constant))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  ObjectValue(input: char, constant: &bool) -> Value {
+    between(char('{'), char('}'), many::<Vec<_>,_>(ObjectField::new(constant)))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .map(|fields| {
+        let mut result = HashMap::new();
+
+        for (name,value) in fields.into_iter() {
+          // TODO complain about same name fields?
+          result.insert(name, value);
+        }
+
+        Value::Object(result)
+      })
+      .parse_lazy(input)
+  }
+);
+
+// TODO .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+// TODO add commas to this thing
+
+make_parser!(
   Alias(input: char) -> Name {
     NameParser::new()
       .skip(char(':'))
@@ -509,6 +576,7 @@ make_parser!(
       .parse_lazy(input)
   }
 );
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -636,4 +704,7 @@ mod tests {
     assert_successful_parse!(FloatValue, "10e+1", Value::Float(10.0e1));
     assert_successful_parse!(FloatValue, "10.0e-1", Value::Float(10.0e-1));
   }
+
+  // TODO add tests for object value
+  // TODO add tests for list values
 }
