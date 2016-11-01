@@ -2,5 +2,12 @@
 GraphQL in Rust!
 
 ## Features Planned
-- [ ] parser
-- [ ] schema?
+
+- [ ] query parser
+~85% complete
+- [ ] schema construction via macros
+0% complete
+- [ ] Resolver trait
+0% complete
+- [ ] `resolver.resolve(schema, query)`
+0% complete

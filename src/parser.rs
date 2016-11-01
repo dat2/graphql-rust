@@ -740,7 +740,9 @@ make_parser!(
 );
 
 // TODO .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-// TODO add commas to this thing
+// TODO optional commas to this mess above :)
+
+// TODO selection set
 
 make_parser!(
   Alias(input: char) -> Name {
