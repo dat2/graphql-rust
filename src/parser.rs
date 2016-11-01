@@ -276,13 +276,19 @@ make_parser!(
     OperationTypeParser::new()
       .and(optional(NameParser::new()))
       .and(optional(VariableDefinitions::new()))
-      .map(|((op_type,name),defns)| {
-        let variable_definitions = match defns {
+      .and(optional(Directives::new()))
+      .map(|(((op_type,name),opt_variable_definitions),opt_directives)| {
+        let variable_definitions = match opt_variable_definitions {
           Some(ds) => ds,
           None => Vec::new()
         };
 
-        Operation::new(op_type, name, variable_definitions, Vec::new())
+        let directives = match opt_directives {
+          Some(ds) => ds,
+          None => Vec::new(),
+        };
+
+        Operation::new(op_type, name, variable_definitions, directives)
       })
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_lazy(input)
@@ -797,7 +803,7 @@ mod tests {
   }
 
   #[test]
-  fn test_parse_operation() {
+  fn test_parse_operation_name() {
     // named operation
     {
       let result = Operation::new(OperationType::Mutation,
@@ -811,6 +817,20 @@ mod tests {
     {
       let result = Operation::new(OperationType::Mutation, None, Vec::new(), Vec::new());
       assert_successful_parse!(OperationDefinition, "mutation", result);
+    }
+  }
+
+  #[test]
+  fn test_parse_operation_variables() {
+    // operation with variable definitions
+    {
+      let result = Operation::new(OperationType::Query,
+                                  Some(String::from("likeStory")),
+                                  vec![VariableDefinition::new(String::from("storyID"),
+                                                               Type::Named(String::from("Int")),
+                                                               None)],
+                                  Vec::new());
+      assert_successful_parse!(OperationDefinition, "query likeStory($storyID: Int)", result);
     }
   }
 
