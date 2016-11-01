@@ -97,10 +97,28 @@ pub struct Directive {
   arguments: Vec<Argument>,
 }
 
+impl Directive {
+  fn new(name: Name, arguments: Vec<Argument>) -> Directive {
+    Directive {
+      name: name,
+      arguments: arguments,
+    }
+  }
+}
+
 #[derive(Debug,PartialEq,Clone)]
 pub struct Argument {
   name: Name,
   value: Value,
+}
+
+impl Argument {
+  fn new(name: Name, value: Value) -> Argument {
+    Argument {
+      name: name,
+      value: value,
+    }
+  }
 }
 
 #[derive(Debug,PartialEq,Clone)]
@@ -544,9 +562,9 @@ make_parser!(
 
 fn hex_digit_to_u8(input: char) -> u8 {
   match input {
-    '0' ... '9' => (input as u8) - ('0' as u8),
-    'a' ... 'f' => (input as u8) - ('a' as u8) + 10,
-    'A' ... 'F' => (input as u8) - ('A' as u8) + 10,
+    '0'...'9' => (input as u8) - ('0' as u8),
+    'a'...'f' => (input as u8) - ('a' as u8) + 10,
+    'A'...'F' => (input as u8) - ('A' as u8) + 10,
     _ => 0,
   }
 }
@@ -670,6 +688,47 @@ make_parser!(
 
         Value::Object(result)
       })
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  Directives(input: char) -> Vec<Directive> {
+    many::<Vec<_>,_>(DirectiveParser::new())
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  DirectiveParser(input: char) -> Directive {
+    char('@')
+      .with(NameParser::new())
+      .and(optional(Arguments::new()))
+      .map(|(name,opt_args)| {
+        Directive::new(name, match opt_args {
+          Some(args) => args,
+          None => Vec::new(),
+        })
+      })
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  Arguments(input: char) -> Vec<Argument> {
+    between(char('('), char(')'), many::<Vec<_>,_>(ArgumentParser::new()))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  ArgumentParser(input: char) -> Argument {
+    NameParser::new()
+      .skip(char(':'))
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .and(ValueParser::new(&false))
+      .map(|(name,value)| Argument::new(name,value))
       .parse_lazy(input)
   }
 );
@@ -918,8 +977,44 @@ mod tests {
     assert_successful_parse!(StringValue, r#""""#, Value::String(String::from("")));
 
     // strings with random stuff in it
-    assert_successful_parse!(StringValue, r#""hello world""#, Value::String(String::from("hello world")));
-    assert_successful_parse!(StringValue, r#""hello \u0025""#, Value::String(String::from("hello %")));
-    assert_successful_parse!(StringValue, r#""hello\n\u0025""#, Value::String(String::from("hello\n%")));
+    assert_successful_parse!(StringValue,
+                             r#""hello world""#,
+                             Value::String(String::from("hello world")));
+    assert_successful_parse!(StringValue,
+                             r#""hello \u0025""#,
+                             Value::String(String::from("hello %")));
+    assert_successful_parse!(StringValue,
+                             r#""hello\n\u0025""#,
+                             Value::String(String::from("hello\n%")));
+  }
+
+  #[test]
+  fn test_parse_argument() {
+    assert_successful_parse!(ArgumentParser,
+                             "x:1",
+                             Argument::new(String::from("x"), Value::Int(1)));
+  }
+
+  #[test]
+  fn test_parse_directive() {
+    // directive no arguments
+    assert_successful_parse!(DirectiveParser,
+                             "@dir",
+                             Directive::new(String::from("dir"), Vec::new()));
+
+    // directive with arguments
+    assert_successful_parse!(DirectiveParser,
+                             "@dir(x:1)",
+                             Directive::new(String::from("dir"),
+                                            vec![Argument::new(String::from("x"), Value::Int(1))]));
+  }
+
+  #[test]
+  fn test_parse_directives() {
+    assert_successful_parse!(Directives,
+                             "@dir\n@dir2(x:1)",
+                             vec![Directive::new(String::from("dir"), Vec::new()),
+                                  Directive::new(String::from("dir2"),
+                                                 vec![Argument::new(String::from("x"), Value::Int(1))])]);
   }
 }
