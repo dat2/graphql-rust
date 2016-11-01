@@ -365,7 +365,7 @@ make_parser!(
   DefaultValue(input: char) -> Value {
     char('=')
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .with(ValueParser::new(&false))
+      .with(ValueParser::new(&true))
       .parse_lazy(input)
   }
 );
@@ -381,7 +381,7 @@ make_parser!(
       .or(ListValue::new(constant))
       .or(ObjectValue::new(constant));
 
-    if *constant {
+    if !*constant {
       VariableParser::new()
         .map(Value::Variable)
         .or(constants)
@@ -896,30 +896,30 @@ mod tests {
   #[test]
   fn test_parse_string_unicodeescape() {
     // unicode string
-    assert_successful_parse!(StringValue, "\"\\u0025\"", Value::String(String::from("%")));
-    assert_successful_parse!(StringValue, "\"\\u0040\"", Value::String(String::from("@")));
+    assert_successful_parse!(StringValue, r#""\u0025""#, Value::String(String::from("%")));
+    assert_successful_parse!(StringValue, r#""\u0040""#, Value::String(String::from("@")));
   }
 
   #[test]
   fn test_parse_string_escaped() {
-    assert_successful_parse!(StringValue, "\"\\\"\"", Value::String(String::from("\"")));
-    assert_successful_parse!(StringValue, "\"\\\\\"", Value::String(String::from("\\")));
-    assert_successful_parse!(StringValue, "\"\\/\"", Value::String(String::from("/")));
-    assert_successful_parse!(StringValue, "\"\\b\"", Value::String(String::from("\x08")));
-    assert_successful_parse!(StringValue, "\"\\f\"", Value::String(String::from("\x0C")));
-    assert_successful_parse!(StringValue, "\"\\n\"", Value::String(String::from("\n")));
-    assert_successful_parse!(StringValue, "\"\\r\"", Value::String(String::from("\r")));
-    assert_successful_parse!(StringValue, "\"\\t\"", Value::String(String::from("\t")));
+    assert_successful_parse!(StringValue, r#""\"""#, Value::String(String::from("\"")));
+    assert_successful_parse!(StringValue, r#""\\""#, Value::String(String::from("\\")));
+    assert_successful_parse!(StringValue, r#""\/""#, Value::String(String::from("/")));
+    assert_successful_parse!(StringValue, r#""\b""#, Value::String(String::from("\x08")));
+    assert_successful_parse!(StringValue, r#""\f""#, Value::String(String::from("\x0C")));
+    assert_successful_parse!(StringValue, r#""\n""#, Value::String(String::from("\n")));
+    assert_successful_parse!(StringValue, r#""\r""#, Value::String(String::from("\r")));
+    assert_successful_parse!(StringValue, r#""\t""#, Value::String(String::from("\t")));
   }
 
   #[test]
   fn test_parse_stringvalue() {
     // empty string
-    assert_successful_parse!(StringValue, "\"\"", Value::String(String::from("")));
+    assert_successful_parse!(StringValue, r#""""#, Value::String(String::from("")));
 
     // strings with random stuff in it
-    assert_successful_parse!(StringValue, "\"hello world\"", Value::String(String::from("hello world")));
-    assert_successful_parse!(StringValue, "\"hello \\u0025\"", Value::String(String::from("hello %")));
-    assert_successful_parse!(StringValue, "\"hello\\n\\u0025\"", Value::String(String::from("hello\n%")));
+    assert_successful_parse!(StringValue, r#""hello world""#, Value::String(String::from("hello world")));
+    assert_successful_parse!(StringValue, r#""hello \u0025""#, Value::String(String::from("hello %")));
+    assert_successful_parse!(StringValue, r#""hello\n\u0025""#, Value::String(String::from("hello\n%")));
   }
 }
