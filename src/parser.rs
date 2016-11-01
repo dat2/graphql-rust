@@ -6,7 +6,8 @@ use std::marker::PhantomData;
 
 use combine::{Parser, ConsumedResult, Stream};
 use combine::char::{tab, char, crlf, string, letter, alpha_num, digit};
-use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value, try};
+use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value, try, parser};
+use combine::primitives::{StreamOnce, ParseError, Error, Consumed, Info};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -377,7 +378,7 @@ make_parser!(
       .or(IntValue::new())
       .or(BooleanValue::new())
       .or(NullValue::new())
-      //.or(EnumValue::new())
+      .or(EnumValue::new())
       .or(ListValue::new(constant))
       .or(ObjectValue::new(constant));
 
@@ -520,19 +521,45 @@ make_parser!(
 make_parser!(
   NullValue(input: char) -> Value {
     string("null")
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .map(|_| Value::Null)
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_lazy(input)
   }
 );
 
 // TODO enum parser: Name but not true or false or null
+make_parser!(
+  EnumValue(input: char) -> Value {
+
+    let mut enum_value_parser = parser(|input| {
+      let _: I   = input;
+      let position = input.position();
+      let (name,input) = try!(NameParser::new().parse_stream(input));
+
+      match name.as_ref() {
+        s @ "true" |
+        s @ "false" |
+        s @ "null" => {
+          let mut errors = ParseError::empty(position);
+          errors.add_error(Error::Unexpected(From::from(s.clone())));
+          errors.add_error(Error::Expected(From::from("name")));
+          Err(Consumed::Empty(errors))
+        },
+
+        s => Ok((Value::Enum(name.clone()),input))
+      }
+    });
+
+    enum_value_parser
+      .parse_lazy(input)
+  }
+);
 
 make_parser!(
   ListValue(input: char, constant: &bool) -> Value {
     between(char('['), char(']'), many(ValueParser::new(constant)))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .map(Value::List)
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_lazy(input)
   }
 );
@@ -587,7 +614,13 @@ mod tests {
       let result = $parser::new().parse(State::new($input)).map(|x| x.0);
       println!("Input({:?}) Result({:?}) Expected(Ok({:?}))", $input, result, $expected);
       assert_eq!(result, Ok($expected))
-    }
+    };
+
+    ($parser:expr,$input:expr,$expected:expr) => {
+      let result = $parser.parse(State::new($input)).map(|x| x.0);
+      println!("Input({:?}) Result({:?}) Expected(Ok({:?}))", $input, result, $expected);
+      assert_eq!(result, Ok($expected))
+    };
   }
 
   #[test]
@@ -705,6 +738,11 @@ mod tests {
     assert_successful_parse!(FloatValue, "10.0e-1", Value::Float(10.0e-1));
   }
 
+  #[test]
+  fn test_parse_const_listvalue() {
+    assert_successful_parse!(ListValue::new(&true), "[null]", Value::List(vec![Value::Null]));
+    assert_successful_parse!(ListValue::new(&true), "[null true false]", Value::List(vec![Value::Null, Value::Boolean(true), Value::Boolean(false)]));
+  }
+
   // TODO add tests for object value
-  // TODO add tests for list values
 }
