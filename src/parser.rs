@@ -574,7 +574,8 @@ make_parser!(
 
 make_parser!(
   ObjectValue(input: char, constant: &bool) -> Value {
-    between(char('{'), char('}'), many::<Vec<_>,_>(ObjectField::new(constant)))
+    between(char('{')
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true)))), char('}'), many::<Vec<_>,_>(ObjectField::new(constant)))
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .map(|fields| {
         let mut result = HashMap::new();
@@ -606,6 +607,8 @@ make_parser!(
 mod tests {
   use super::*;
   use combine::{State, Parser};
+
+  use std::collections::HashMap;
 
   macro_rules! assert_successful_parse {
     // base case
@@ -789,5 +792,17 @@ mod tests {
     assert_successful_parse!(EnumValue, "test", Value::Enum(String::from("test")));
   }
 
-  // TODO add tests for object value
+  #[test]
+  fn test_parse_objectvalue_empty() {
+    assert_successful_parse!(ObjectValue::new(&true), "{}", Value::Object(HashMap::new()));
+  }
+
+  #[test]
+  fn test_parse_objectvalue_onefield() {
+    let mut map = HashMap::new();
+    map.insert(String::from("x"), Value::Int(1));
+    let value = Value::Object(map);
+
+    assert_successful_parse!(ObjectValue::new(&true), "{ x : 1 }", value);
+  }
 }
