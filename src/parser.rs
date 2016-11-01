@@ -823,15 +823,25 @@ mod tests {
   #[test]
   fn test_parse_operation_variables() {
     // operation with variable definitions
-    {
-      let result = Operation::new(OperationType::Query,
-                                  Some(String::from("likeStory")),
-                                  vec![VariableDefinition::new(String::from("storyID"),
-                                                               Type::Named(String::from("Int")),
-                                                               None)],
-                                  Vec::new());
-      assert_successful_parse!(OperationDefinition, "query likeStory($storyID: Int)", result);
-    }
+    let result = Operation::new(OperationType::Query,
+                                Some(String::from("likeStory")),
+                                vec![VariableDefinition::new(String::from("storyID"),
+                                                             Type::Named(String::from("Int")),
+                                                             None)],
+                                Vec::new());
+    assert_successful_parse!(OperationDefinition,
+                             "query likeStory($storyID: Int)",
+                             result);
+  }
+
+  #[test]
+  fn test_parse_operation_directives() {
+    // operatin with directives
+    let result = Operation::new(OperationType::Query,
+                                Some(String::from("likeStory")),
+                                Vec::new(),
+                                vec![Directive::new(String::from("dir"), Vec::new())]);
+    assert_successful_parse!(OperationDefinition, "query likeStory @dir", result);
   }
 
   #[test]
