@@ -1,11 +1,10 @@
 // #![deny(missing_docs)]
 
 use std::collections::HashMap;
-
 use std::marker::PhantomData;
 
 use combine::{Parser, ConsumedResult, Stream};
-use combine::char::{tab, char, crlf, string, letter, alpha_num, digit};
+use combine::char::{tab, char, crlf, string, letter, alpha_num, digit, hex_digit};
 use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value, try, parser};
 use combine::primitives::{ParseError, Error, Consumed};
 
@@ -439,11 +438,11 @@ make_parser!(
         result
       })
       .and(
-        // FractionalPart ExponentialPart
+// FractionalPart ExponentialPart
         try(FractionalPart::new().map(Some).and(ExponentialPart::new().map(Some)))
-          // FractionalPart
+// FractionalPart
           .or(FractionalPart::new().map(Some).and(value(None)))
-          // ExponentialPart
+// ExponentialPart
           .or(value(None).and(ExponentialPart::new().map(Some)))
       )
       .map(|(int_part,(opt_fract_part, opt_exp_part)) : (String, (Option<String>,Option<String>))| {
@@ -454,23 +453,23 @@ make_parser!(
 
         match opt_fract_part {
           Some(fract_part) => {
-            // add the fractional part first
+// add the fractional part first
             result.push_str(&fract_part);
 
-            // if exponential part is there, we can just add it
+// if exponential part is there, we can just add it
             if let Some(exp_part) = opt_exp_part {
               result.push_str(&exp_part);
             }
           },
           None => {
-            // to make rust parse it correctly, it needs to have a fractional number before the exponent part
+// to make rust parse it correctly, it needs to have a fractional number before the exponent part
             if let Some(exp_part) = opt_exp_part {
               result.push_str(".0");
               result.push_str(&exp_part);
             }
           }
         }
-        // finally let rust parse it
+// finally let rust parse it
         result.parse::<f32>().unwrap()
       })
       .map(Value::Float)
@@ -514,6 +513,86 @@ make_parser!(
     string("true").map(|_| Value::Boolean(true))
       .or(string("false").map(|_| Value::Boolean(false)))
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  StringValue(input: char) -> Value {
+    between(
+      char('"'),
+      char('"'),
+      many::<Vec<String>,_>(
+        try(EscapedUnicode::new())
+          .or(try(EscapedCharacter::new()))
+          .or(none_of("\"\\\r\n".chars()).map(|c: char| c.to_string()))
+      )
+    )
+      .map(|vec| {
+        vec.iter()
+          .cloned()
+          .fold(String::from(""), |mut acc,s| {
+            acc.push_str(&s);
+            acc
+          })
+      })
+      .map(Value::String)
+      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .parse_lazy(input)
+  }
+);
+
+fn hex_digit_to_u8(input: char) -> u8 {
+  match input {
+    '0' ... '9' => (input as u8) - ('0' as u8),
+    'a' ... 'f' => (input as u8) - ('a' as u8) + 10,
+    'A' ... 'F' => (input as u8) - ('A' as u8) + 10,
+    _ => 0,
+  }
+}
+
+make_parser!(
+  EscapedUnicode(input: char) -> String {
+    string("\\u")
+      .with(
+        hex_digit().and(hex_digit()).and(hex_digit()).and(hex_digit())
+          .map(|(((b1,b2),b3),b4)| {
+            let left = hex_digit_to_u8(b1) << 4 ^ hex_digit_to_u8(b2);
+            let right = hex_digit_to_u8(b3) << 4 ^ hex_digit_to_u8(b4);
+
+            let mut bytes = vec![];
+            if left != 0 {
+              bytes.push(left);
+            }
+            if right != 0 {
+              bytes.push(right);
+            }
+
+            String::from_utf8(bytes).unwrap()
+          })
+      )
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  EscapedCharacter(input: char) -> String {
+    char('\\')
+      .and(one_of("\"/\\bfnrt".chars()))
+      .map(|(_,b)| {
+        match b {
+          'b' => String::from("\x08"),
+          'f' => String::from("\x0C"),
+          'n' => String::from("\n"),
+          'r' => String::from("\r"),
+          't' => String::from("\t"),
+          c => {
+            let mut result = String::new();
+            result.push(c);
+            result
+          }
+        }
+      })
       .parse_lazy(input)
   }
 );
@@ -574,14 +653,18 @@ make_parser!(
 
 make_parser!(
   ObjectValue(input: char, constant: &bool) -> Value {
-    between(char('{')
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true)))), char('}'), many::<Vec<_>,_>(ObjectField::new(constant)))
+    between(
+      char('{')
+        .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true)))),
+      char('}'),
+      many::<Vec<_>,_>(ObjectField::new(constant))
+    )
       .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .map(|fields| {
         let mut result = HashMap::new();
 
         for (name,value) in fields.into_iter() {
-          // TODO complain about same name fields?
+// TODO complain about same name fields?
           result.insert(name, value);
         }
 
@@ -744,8 +827,12 @@ mod tests {
 
   #[test]
   fn test_parse_const_listvalue() {
-    assert_successful_parse!(ListValue::new(&true), "[null]", Value::List(vec![Value::Null]));
-    assert_successful_parse!(ListValue::new(&true), "[null true false]", Value::List(vec![Value::Null, Value::Boolean(true), Value::Boolean(false)]));
+    assert_successful_parse!(ListValue::new(&true),
+                             "[null]",
+                             Value::List(vec![Value::Null]));
+    assert_successful_parse!(ListValue::new(&true),
+                             "[null true false]",
+                             Value::List(vec![Value::Null, Value::Boolean(true), Value::Boolean(false)]));
   }
 
   #[test]
@@ -756,9 +843,9 @@ mod tests {
       match result {
         Err(err) => {
           assert!(format!("{}", err).contains("Unexpected `true`"));
-        },
+        }
         // it should be an error
-        _ => assert!(false)
+        _ => assert!(false),
       }
     }
 
@@ -768,9 +855,9 @@ mod tests {
       match result {
         Err(err) => {
           assert!(format!("{}", err).contains("Unexpected `false`"));
-        },
+        }
         // it should be an error
-        _ => assert!(false)
+        _ => assert!(false),
       }
     }
 
@@ -780,9 +867,9 @@ mod tests {
       match result {
         Err(err) => {
           assert!(format!("{}", err).contains("Unexpected `null`"));
-        },
+        }
         // it should be an error
-        _ => assert!(false)
+        _ => assert!(false),
       }
     }
   }
@@ -804,5 +891,35 @@ mod tests {
     let value = Value::Object(map);
 
     assert_successful_parse!(ObjectValue::new(&true), "{ x : 1 }", value);
+  }
+
+  #[test]
+  fn test_parse_string_unicodeescape() {
+    // unicode string
+    assert_successful_parse!(StringValue, "\"\\u0025\"", Value::String(String::from("%")));
+    assert_successful_parse!(StringValue, "\"\\u0040\"", Value::String(String::from("@")));
+  }
+
+  #[test]
+  fn test_parse_string_escaped() {
+    assert_successful_parse!(StringValue, "\"\\\"\"", Value::String(String::from("\"")));
+    assert_successful_parse!(StringValue, "\"\\\\\"", Value::String(String::from("\\")));
+    assert_successful_parse!(StringValue, "\"\\/\"", Value::String(String::from("/")));
+    assert_successful_parse!(StringValue, "\"\\b\"", Value::String(String::from("\x08")));
+    assert_successful_parse!(StringValue, "\"\\f\"", Value::String(String::from("\x0C")));
+    assert_successful_parse!(StringValue, "\"\\n\"", Value::String(String::from("\n")));
+    assert_successful_parse!(StringValue, "\"\\r\"", Value::String(String::from("\r")));
+    assert_successful_parse!(StringValue, "\"\\t\"", Value::String(String::from("\t")));
+  }
+
+  #[test]
+  fn test_parse_stringvalue() {
+    // empty string
+    assert_successful_parse!(StringValue, "\"\"", Value::String(String::from("")));
+
+    // strings with random stuff in it
+    assert_successful_parse!(StringValue, "\"hello world\"", Value::String(String::from("hello world")));
+    assert_successful_parse!(StringValue, "\"hello \\u0025\"", Value::String(String::from("hello %")));
+    assert_successful_parse!(StringValue, "\"hello\\n\\u0025\"", Value::String(String::from("hello\n%")));
   }
 }
