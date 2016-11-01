@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use combine::{Parser, ConsumedResult, Stream};
 use combine::char::{tab, char, crlf, string, letter, alpha_num, digit};
 use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value, try, parser};
-use combine::primitives::{StreamOnce, ParseError, Error, Consumed, Info};
+use combine::primitives::{ParseError, Error, Consumed};
 
 pub type Name = String;
 pub type SelectionSet = Vec<Selection>;
@@ -527,26 +527,24 @@ make_parser!(
   }
 );
 
-// TODO enum parser: Name but not true or false or null
 make_parser!(
   EnumValue(input: char) -> Value {
 
     let mut enum_value_parser = parser(|input| {
-      let _: I   = input;
+      let _: I  = input;
       let position = input.position();
       let (name,input) = try!(NameParser::new().parse_stream(input));
 
-      match name.as_ref() {
-        s @ "true" |
-        s @ "false" |
-        s @ "null" => {
-          let mut errors = ParseError::empty(position);
-          errors.add_error(Error::Unexpected(From::from(s.clone())));
-          errors.add_error(Error::Expected(From::from("name")));
-          Err(Consumed::Empty(errors))
-        },
-
-        s => Ok((Value::Enum(name.clone()),input))
+      if    name == String::from("true")
+         || name == String::from("false")
+         || name == String::from("null")
+      {
+        let mut errors = ParseError::empty(position);
+        errors.add_error(Error::Unexpected(From::from(name.clone())));
+        errors.add_error(Error::Expected(From::from("name")));
+        Err(Consumed::Empty(errors))
+      } else {
+        Ok((Value::Enum(name.clone()),input))
       }
     });
 
@@ -610,6 +608,9 @@ mod tests {
   use combine::{State, Parser};
 
   macro_rules! assert_successful_parse {
+    // base case
+    () => {};
+
     ($parser:ident,$input:expr,$expected:expr) => {
       let result = $parser::new().parse(State::new($input)).map(|x| x.0);
       println!("Input({:?}) Result({:?}) Expected(Ok({:?}))", $input, result, $expected);
@@ -742,6 +743,50 @@ mod tests {
   fn test_parse_const_listvalue() {
     assert_successful_parse!(ListValue::new(&true), "[null]", Value::List(vec![Value::Null]));
     assert_successful_parse!(ListValue::new(&true), "[null true false]", Value::List(vec![Value::Null, Value::Boolean(true), Value::Boolean(false)]));
+  }
+
+  #[test]
+  fn test_parse_enumvalue_failure() {
+    // it should fail to parse true
+    {
+      let result = EnumValue::new().parse(State::new("true")).map(|x| x.0);
+      match result {
+        Err(err) => {
+          assert!(format!("{}", err).contains("Unexpected `true`"));
+        },
+        // it should be an error
+        _ => assert!(false)
+      }
+    }
+
+    // it should fail to parse false
+    {
+      let result = EnumValue::new().parse(State::new("false")).map(|x| x.0);
+      match result {
+        Err(err) => {
+          assert!(format!("{}", err).contains("Unexpected `false`"));
+        },
+        // it should be an error
+        _ => assert!(false)
+      }
+    }
+
+    // it should fail to parse null
+    {
+      let result = EnumValue::new().parse(State::new("null")).map(|x| x.0);
+      match result {
+        Err(err) => {
+          assert!(format!("{}", err).contains("Unexpected `null`"));
+        },
+        // it should be an error
+        _ => assert!(false)
+      }
+    }
+  }
+
+  #[test]
+  fn test_parse_enumvalue_successful() {
+    assert_successful_parse!(EnumValue, "test", Value::Enum(String::from("test")));
   }
 
   // TODO add tests for object value
