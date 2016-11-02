@@ -72,29 +72,6 @@ pub enum Selection {
 // 2.5 Fields
 // ===========================================================================
 
-// ===========================================================================
-// 2.6 Arguments
-// ===========================================================================
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct Argument {
-  name: Name,
-  value: Value,
-}
-
-impl Argument {
-  pub fn new(name: Name, value: Value) -> Argument {
-    Argument {
-      name: name,
-      value: value,
-    }
-  }
-}
-
-// ===========================================================================
-// 2.7 Field Alias
-// ===========================================================================
-
 #[derive(Debug,PartialEq,Clone)]
 pub struct Field {
   alias: Option<Name>,
@@ -120,6 +97,29 @@ impl Field {
     }
   }
 }
+
+// ===========================================================================
+// 2.6 Arguments
+// ===========================================================================
+
+#[derive(Debug,PartialEq,Clone)]
+pub struct Argument {
+  name: Name,
+  value: Value,
+}
+
+impl Argument {
+  pub fn new(name: Name, value: Value) -> Argument {
+    Argument {
+      name: name,
+      value: value,
+    }
+  }
+}
+
+// ===========================================================================
+// 2.7 Field Alias
+// ===========================================================================
 
 // ===========================================================================
 // 2.8 Fragments
@@ -168,7 +168,11 @@ pub struct Fragment {
 }
 
 impl Fragment {
-  pub fn new(name: Name, type_condition: Type, directives: Vec<Directive>, selection_set: Vec<Selection>) -> Fragment {
+  pub fn new(name: Name,
+             type_condition: Type,
+             directives: Vec<Directive>,
+             selection_set: Vec<Selection>)
+             -> Fragment {
     Fragment {
       name: name,
       type_condition: type_condition,
