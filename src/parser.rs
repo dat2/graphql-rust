@@ -8,159 +8,11 @@ use combine::char::{tab, char, crlf, string, letter, alpha_num, digit, hex_digit
 use combine::combinator::{between, many, many1, none_of, one_of, or, optional, value, try, parser};
 use combine::primitives::{ParseError, Error, Consumed};
 
-pub type Name = String;
-pub type SelectionSet = Vec<Selection>;
+use ast::*;
 
-#[derive(Debug,PartialEq,Clone)]
-pub struct Document {
-  definitions: Vec<Definition>,
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub enum Definition {
-  Operation(Operation),
-  SelectionSet(SelectionSet),
-  Fragment(Fragment),
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct Operation {
-  op_type: OperationType,
-  name: Option<Name>,
-  variable_definitions: Vec<VariableDefinition>,
-  directives: Vec<Directive>,
-}
-
-impl Operation {
-  fn new(op_type: OperationType,
-         name: Option<Name>,
-         variable_definitions: Vec<VariableDefinition>,
-         directives: Vec<Directive>)
-         -> Operation {
-    Operation {
-      op_type: op_type,
-      name: name,
-      variable_definitions: variable_definitions,
-      directives: directives,
-    }
-  }
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub enum OperationType {
-  Query,
-  Mutation,
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct VariableDefinition {
-  variable: Variable,
-  var_type: Type,
-  default_value: Option<Value>,
-}
-
-impl VariableDefinition {
-  fn new(variable: Variable, var_type: Type, default_value: Option<Value>) -> VariableDefinition {
-    VariableDefinition {
-      variable: variable,
-      var_type: var_type,
-      default_value: default_value,
-    }
-  }
-}
-
-pub type Variable = String;
-
-#[derive(Debug,PartialEq,Clone)]
-pub enum Type {
-  Named(Name),
-  List(Box<Type>),
-  NonNull(Box<Type>),
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub enum Value {
-  Variable(Variable),
-  Int(i32),
-  Float(f32),
-  String(String),
-  Boolean(bool),
-  Null,
-  Enum(String),
-  List(Vec<Value>),
-  Object(HashMap<String, Value>),
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct Directive {
-  name: Name,
-  arguments: Vec<Argument>,
-}
-
-impl Directive {
-  fn new(name: Name, arguments: Vec<Argument>) -> Directive {
-    Directive {
-      name: name,
-      arguments: arguments,
-    }
-  }
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct Argument {
-  name: Name,
-  value: Value,
-}
-
-impl Argument {
-  fn new(name: Name, value: Value) -> Argument {
-    Argument {
-      name: name,
-      value: value,
-    }
-  }
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub enum Selection {
-  Field(Field),
-  FragmentSpread(Name, Vec<Directive>),
-  InlineFragment(Option<Type>, Vec<Directive>, SelectionSet),
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct Field {
-  alias: Option<Name>,
-  name: Name,
-  arguments: Vec<Argument>,
-  directives: Vec<Directive>,
-  selection_set: SelectionSet,
-}
-
-impl Field {
-  fn new(alias: Option<Name>,
-         name: Name,
-         arguments: Vec<Argument>,
-         directives: Vec<Directive>,
-         selection_set: SelectionSet)
-         -> Field {
-    Field {
-      alias: alias,
-      name: name,
-      arguments: arguments,
-      directives: directives,
-      selection_set: selection_set,
-    }
-  }
-}
-
-#[derive(Debug,PartialEq,Clone)]
-pub struct Fragment {
-  name: Name,
-  type_condition: Type,
-  directives: Vec<Directive>,
-  selection_set: SelectionSet,
-}
+// ===========================================================================
+// The main make_parser macro
+// ===========================================================================
 
 macro_rules! make_parser {
 
@@ -235,27 +87,51 @@ macro_rules! make_parser {
 // char :: [0,D7FF] u [E000,10FFFF]
 // somehow we need to wrangle char to match the graphql types :)
 
+// ===========================================================================
+// Utility Functions
+// ===========================================================================
+
+fn or_empty<T>(opt_vec: Option<Vec<T>>) -> Vec<T> {
+  match opt_vec {
+    Some(vec) => vec,
+    None => Vec::new(),
+  }
+}
+
+// ===========================================================================
+// 2.1 Lexers
+// ===========================================================================
+macro_rules! ignore_parser {
+  () => (
+    many::<Vec<_>,_>(
+      WhiteSpace::new()
+        .or(LineTerminator::new(&true))
+        .or(LineComment::new())
+      )
+  )
+}
+
 make_parser!(
-  WhiteSpace(input: char) -> char {
-    char(' ').or(tab())
+  WhiteSpace(input: char) -> () {
+    value(())
+      .skip(char(' ').or(tab()))
       .parse_lazy(input)
   }
 );
 
 make_parser!(
-  LineTerminator(input: char, is_clr: &bool) -> char {
+  LineTerminator(input: char, is_clr: &bool) -> () {
 
     let cr = char('\r');
     let lf = char('\n');
 
     if !is_clr {
-      cr.clone()
-        .or(lf)
+      value(())
+        .skip(cr.or(lf))
         .parse_lazy(input)
     } else {
-      crlf()
-        .or(cr)
-        .or(lf)
+      value(())
+        .skip(crlf().or(cr).or(lf))
         .parse_lazy(input)
     }
   }
@@ -272,25 +148,61 @@ make_parser!(
 );
 
 make_parser!(
+  NameParser(input: char) -> Name {
+    or(letter(),char('_'))
+      .map(|c: char| c.to_string())
+      .and(many::<String,_>(alpha_num().or(char('_'))))
+      .map(|(mut f,r)| {
+        f.push_str(&r);
+        f
+      })
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.2 Document Parsers
+// ===========================================================================
+
+// http://facebook.github.io/graphql/#sec-Language.Query-Document
+// Query shorthand
+//
+// If a document contains only one query operation, and that query defines no
+// variables and contains no directives, that operation may be represented in a
+// short‐hand form which omits the query keyword and query name.
+make_parser!(
+  DocumentParser(input: char) -> Document {
+    try(SelectionSetParser::new().map(|selection_set| {
+      vec![Definition::Operation(Operation::new(OperationType::Query,None,Vec::new(),Vec::new(),selection_set))]
+    }))
+      .or(many1::<Vec<_>,_>(
+        OperationDefinition::new().map(Definition::Operation)
+          .or(FragmentDefinition::new().map(Definition::Fragment))))
+      .map(|defns| {
+        Document::new(defns)
+      })
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.3 Operation Parsers
+// ===========================================================================
+
+make_parser!(
   OperationDefinition(input: char) -> Operation {
     OperationTypeParser::new()
       .and(optional(NameParser::new()))
       .and(optional(VariableDefinitions::new()))
       .and(optional(Directives::new()))
-      .map(|(((op_type,name),opt_variable_definitions),opt_directives)| {
-        let variable_definitions = match opt_variable_definitions {
-          Some(ds) => ds,
-          None => Vec::new()
-        };
-
-        let directives = match opt_directives {
-          Some(ds) => ds,
-          None => Vec::new(),
-        };
-
-        Operation::new(op_type, name, variable_definitions, directives)
+      .and(SelectionSetParser::new())
+      .map(|((((op_type,name),opt_variable_definitions),opt_directives),selection_set)| {
+        let variable_definitions = or_empty(opt_variable_definitions);
+        let directives = or_empty(opt_directives);
+        Operation::new(op_type, name, variable_definitions, directives, selection_set)
       })
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -299,100 +211,165 @@ make_parser!(
   OperationTypeParser(input: char) -> OperationType {
     string("query").map(|_| OperationType::Query)
       .or(string("mutation").map(|_| OperationType::Mutation))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.4 Selection Set Parsers
+// ===========================================================================
+make_parser!(
+  SelectionSetParser(input: char) -> SelectionSet {
+    between(char('{').skip(ignore_parser!()), char('}').skip(ignore_parser!()), many::<Vec<_>,_>(SelectionParser::new()))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
 
 make_parser!(
-  NameParser(input: char) -> Name {
-    or(letter(),char('_'))
-      .map(|c| {
-        let mut result = String::new();
-        result.push(c);
-        result
+  SelectionParser(input: char) -> Selection {
+      FieldParser::new().map(Selection::Field)
+        .or(try(FragmentSpreadParser::new()).map(Selection::FragmentSpread))
+        .or(InlineFragmentParser::new().map(Selection::InlineFragment))
+        .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.5 Field Parser
+// ===========================================================================
+make_parser!(
+  FieldParser(input: char) -> Field {
+    optional(Alias::new())
+      .and(NameParser::new())
+      .and(optional(Arguments::new()))
+      .and(optional(Directives::new()))
+      .and(optional(SelectionSetParser::new()))
+      .map(|((((opt_alias,name),opt_arguments),opt_directives),opt_selection_set)| {
+        Field::new(opt_alias,name,or_empty(opt_arguments),or_empty(opt_directives),or_empty(opt_selection_set))
       })
-      .and(many::<String,_>(alpha_num().or(char('_'))))
-      .map(|(mut f,r)| {
-        f.push_str(&r);
-        f
-      })
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.6 Arguments Parsers
+// ===========================================================================
+make_parser!(
+  Arguments(input: char) -> Vec<Argument> {
+    between(char('('), char(')'), many::<Vec<_>,_>(ArgumentParser::new()))
       .parse_lazy(input)
   }
 );
 
 make_parser!(
-  VariableDefinitions(input: char) -> Vec<VariableDefinition> {
-    between(char('('), char(')'), many(VariableDefinitionParser::new()))
-      .parse_lazy(input)
-  }
-);
-
-make_parser!(
-  VariableDefinitionParser(input: char) -> VariableDefinition {
-    VariableParser::new()
-      .skip(char(':'))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .and(TypeParser::new())
-      .and(optional(DefaultValue::new()))
-      .map(|((variable,var_type),opt_type)| {
-        VariableDefinition::new(variable, var_type, opt_type)
-      })
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_lazy(input)
-  }
-);
-
-make_parser!(
-  VariableParser(input: char) -> Variable {
-    char('$')
-      .with(NameParser::new()) // skip the $
-      .parse_lazy(input)
-  }
-);
-
-make_parser!(
-  TypeParser(input: char) -> Type {
-    NonNullType::new().or(NamedType::new()).or(ListType::new())
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_lazy(input)
-  }
-);
-
-make_parser!(
-  NamedType(input: char) -> Type {
+  ArgumentParser(input: char) -> Argument {
     NameParser::new()
+      .skip(char(':'))
+      .skip(ignore_parser!())
+      .and(ValueParser::new(&false))
+      .map(|(name,value)| Argument::new(name,value))
+      .parse_lazy(input)
+  }
+);
+// ===========================================================================
+// 2.7 Alias Parser
+// ===========================================================================
+
+make_parser!(
+  Alias(input: char) -> Name {
+    NameParser::new()
+      .skip(char(':'))
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.8 Fragment Parsers
+// ===========================================================================
+
+make_parser!(
+  FragmentSpreadParser(input: char) -> FragmentSpread {
+    string("...")
+      .with(FragmentNameParser::new())
+      .and(optional(Directives::new()))
+      .map(|(fragment_name, opt_directives)| {
+        FragmentSpread::new(fragment_name, or_empty(opt_directives))
+      })
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  FragmentNameParser(input: char) -> Name {
+
+    let mut fragment_name_parser = parser(|input| {
+      let _: I  = input;
+      let position = input.position();
+      let (name,input) = try!(NameParser::new().parse_stream(input));
+
+      if name == String::from("on")
+      {
+        let mut errors = ParseError::empty(position);
+        errors.add_error(Error::Unexpected(From::from(name.clone())));
+        errors.add_error(Error::Expected(From::from("name")));
+        Err(Consumed::Empty(errors))
+      } else {
+        Ok((name.clone(),input))
+      }
+    });
+
+    fragment_name_parser
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  InlineFragmentParser(input: char) -> InlineFragment {
+    string("...")
+      .with(optional(TypeCondition::new()))
+      .and(optional(Directives::new()))
+      .and(SelectionSetParser::new())
+      .map(|((opt_type_condition,opt_directives),selection_set)| {
+        InlineFragment::new(opt_type_condition,or_empty(opt_directives),selection_set)
+      })
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  TypeCondition(input: char) -> Type {
+    string("on")
+      .skip(ignore_parser!())
+      .with(NameParser::new())
       .map(Type::Named)
       .parse_lazy(input)
   }
 );
 
 make_parser!(
-  ListType(input: char) -> Type {
-    between(char('['),char(']'), TypeParser::new())
-      .map(|t| Type::List(Box::new(t)))
+  FragmentDefinition(input: char) -> Fragment {
+    string("fragment")
+      .skip(ignore_parser!())
+      .with(FragmentNameParser::new())
+      .and(TypeCondition::new())
+      .and(optional(Directives::new()))
+      .and(SelectionSetParser::new())
+      .map(|(((fragment_name,type_condition),opt_directives),selection_set)| {
+        Fragment::new(fragment_name,type_condition,or_empty(opt_directives),selection_set)
+      })
       .parse_lazy(input)
   }
 );
 
-make_parser!(
-  NonNullType(input: char) -> Type {
-    char('!')
-      .with(NamedType::new().or(ListType::new()))
-      .map(|t| Type::NonNull(Box::new(t)))
-      .parse_lazy(input)
-  }
-);
 
-make_parser!(
-  DefaultValue(input: char) -> Value {
-    char('=')
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .with(ValueParser::new(&true))
-      .parse_lazy(input)
-  }
-);
+// ===========================================================================
+// 2.9 Value Parsers
+// ===========================================================================
 
 make_parser!(
   ValueParser(input: char, constant: &bool) -> Value {
@@ -445,7 +422,7 @@ make_parser!(
         }
       })
       .map(Value::Int)
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -497,7 +474,7 @@ make_parser!(
         result.parse::<f32>().unwrap()
       })
       .map(Value::Float)
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -536,7 +513,7 @@ make_parser!(
   BooleanValue(input: char) -> Value {
     string("true").map(|_| Value::Boolean(true))
       .or(string("false").map(|_| Value::Boolean(false)))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -561,7 +538,7 @@ make_parser!(
           })
       })
       .map(Value::String)
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -625,7 +602,7 @@ make_parser!(
   NullValue(input: char) -> Value {
     string("null")
       .map(|_| Value::Null)
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -658,9 +635,8 @@ make_parser!(
 
 make_parser!(
   ListValue(input: char, constant: &bool) -> Value {
-    between(char('['), char(']'), many(ValueParser::new(constant)))
+    between(char('[').skip(ignore_parser!()), char(']').skip(ignore_parser!()), many(ValueParser::new(constant)))
       .map(Value::List)
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .parse_lazy(input)
   }
 );
@@ -669,7 +645,7 @@ make_parser!(
   ObjectField(input: char, constant: &bool) -> (String, Value) {
     NameParser::new()
       .skip(char(':'))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .skip(ignore_parser!())
       .and(ValueParser::new(constant))
       .parse_lazy(input)
   }
@@ -678,17 +654,15 @@ make_parser!(
 make_parser!(
   ObjectValue(input: char, constant: &bool) -> Value {
     between(
-      char('{')
-        .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true)))),
-      char('}'),
+      char('{').skip(ignore_parser!()),
+      char('}').skip(ignore_parser!()),
       many::<Vec<_>,_>(ObjectField::new(constant))
     )
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
       .map(|fields| {
         let mut result = HashMap::new();
 
+  // TODO complain about same name fields?
         for (name,value) in fields.into_iter() {
-// TODO complain about same name fields?
           result.insert(name, value);
         }
 
@@ -698,6 +672,90 @@ make_parser!(
   }
 );
 
+
+// ===========================================================================
+// 2.10 Variable Parsers
+// ===========================================================================
+
+make_parser!(
+  VariableParser(input: char) -> Variable {
+    char('$')
+      .with(NameParser::new()) // skip the $
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  VariableDefinitions(input: char) -> Vec<VariableDefinition> {
+    between(char('('), char(')').skip(ignore_parser!()), many(VariableDefinitionParser::new()))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  VariableDefinitionParser(input: char) -> VariableDefinition {
+    VariableParser::new()
+      .skip(char(':'))
+      .skip(ignore_parser!())
+      .and(TypeParser::new())
+      .and(optional(DefaultValue::new()))
+      .map(|((variable,var_type),opt_type)| {
+        VariableDefinition::new(variable, var_type, opt_type)
+      })
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  DefaultValue(input: char) -> Value {
+    char('=')
+      .skip(ignore_parser!())
+      .with(ValueParser::new(&true))
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.11 Type Parsers
+// ===========================================================================
+
+make_parser!(
+  TypeParser(input: char) -> Type {
+    NonNullType::new().or(NamedType::new()).or(ListType::new())
+      .skip(ignore_parser!())
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  NamedType(input: char) -> Type {
+    NameParser::new()
+      .map(Type::Named)
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  ListType(input: char) -> Type {
+    between(char('[').skip(ignore_parser!()),char(']').skip(ignore_parser!()), TypeParser::new())
+      .map(|t| Type::List(Box::new(t)))
+      .parse_lazy(input)
+  }
+);
+
+make_parser!(
+  NonNullType(input: char) -> Type {
+    char('!')
+      .with(NamedType::new().or(ListType::new()))
+      .map(|t| Type::NonNull(Box::new(t)))
+      .parse_lazy(input)
+  }
+);
+
+// ===========================================================================
+// 2.12 Directive Parsers
+// ===========================================================================
 make_parser!(
   Directives(input: char) -> Vec<Directive> {
     many::<Vec<_>,_>(DirectiveParser::new())
@@ -710,45 +768,8 @@ make_parser!(
     char('@')
       .with(NameParser::new())
       .and(optional(Arguments::new()))
-      .map(|(name,opt_args)| {
-        Directive::new(name, match opt_args {
-          Some(args) => args,
-          None => Vec::new(),
-        })
-      })
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .parse_lazy(input)
-  }
-);
-
-make_parser!(
-  Arguments(input: char) -> Vec<Argument> {
-    between(char('('), char(')'), many::<Vec<_>,_>(ArgumentParser::new()))
-      .parse_lazy(input)
-  }
-);
-
-make_parser!(
-  ArgumentParser(input: char) -> Argument {
-    NameParser::new()
-      .skip(char(':'))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-      .and(ValueParser::new(&false))
-      .map(|(name,value)| Argument::new(name,value))
-      .parse_lazy(input)
-  }
-);
-
-// TODO .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
-// TODO optional commas to this mess above :)
-
-// TODO selection set
-
-make_parser!(
-  Alias(input: char) -> Name {
-    NameParser::new()
-      .skip(char(':'))
-      .skip(many::<Vec<_>,_>(or(WhiteSpace::new(), LineTerminator::new(&true))))
+      .map(|(name,opt_args)| Directive::new(name, or_empty(opt_args)))
+      .skip(ignore_parser!())
       .parse_lazy(input)
   }
 );
@@ -756,6 +777,7 @@ make_parser!(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use ast::*;
   use combine::{State, Parser};
 
   use std::collections::HashMap;
@@ -777,15 +799,12 @@ mod tests {
     };
   }
 
+  // ===========================================================================
+  // 2.1 Lexer Tests
+  // ===========================================================================
   #[test]
   fn test_parse_comment() {
     assert_successful_parse!(LineComment, "#hello world\r\n", ());
-  }
-
-  #[test]
-  fn test_parse_operationtype() {
-    assert_successful_parse!(OperationTypeParser, "query", OperationType::Query);
-    assert_successful_parse!(OperationTypeParser, "mutation", OperationType::Mutation);
   }
 
   #[test]
@@ -797,11 +816,18 @@ mod tests {
     assert_successful_parse!(NameParser, "Zasd", String::from("Zasd"));
   }
 
+  // ===========================================================================
+  // 2.2 Document Tests
+  // ===========================================================================
+
+  // ===========================================================================
+  // 2.3 Operation Tests
+  // ===========================================================================
+
   #[test]
-  fn test_parse_alias() {
-    assert_successful_parse!(Alias, "asd:", String::from("asd"));
-    assert_successful_parse!(Alias, "asd :", String::from("asd"));
-    assert_successful_parse!(Alias, "asd \r\n:", String::from("asd"));
+  fn test_parse_operationtype() {
+    assert_successful_parse!(OperationTypeParser, "query", OperationType::Query);
+    assert_successful_parse!(OperationTypeParser, "mutation", OperationType::Mutation);
   }
 
   #[test]
@@ -811,14 +837,15 @@ mod tests {
       let result = Operation::new(OperationType::Mutation,
                                   Some(String::from("test")),
                                   Vec::new(),
+                                  Vec::new(),
                                   Vec::new());
-      assert_successful_parse!(OperationDefinition, "mutation test", result);
+      assert_successful_parse!(OperationDefinition, "mutation test { }", result);
     }
 
     // non named
     {
-      let result = Operation::new(OperationType::Mutation, None, Vec::new(), Vec::new());
-      assert_successful_parse!(OperationDefinition, "mutation", result);
+      let result = Operation::new(OperationType::Mutation, None, Vec::new(), Vec::new(), Vec::new());
+      assert_successful_parse!(OperationDefinition, "mutation { }", result);
     }
   }
 
@@ -830,63 +857,61 @@ mod tests {
                                 vec![VariableDefinition::new(String::from("storyID"),
                                                              Type::Named(String::from("Int")),
                                                              None)],
+                                Vec::new(),
                                 Vec::new());
     assert_successful_parse!(OperationDefinition,
-                             "query likeStory($storyID: Int)",
+                             "query likeStory($storyID: Int) { }",
                              result);
   }
 
   #[test]
   fn test_parse_operation_directives() {
-    // operatin with directives
+    // operation with directives
     let result = Operation::new(OperationType::Query,
                                 Some(String::from("likeStory")),
                                 Vec::new(),
-                                vec![Directive::new(String::from("dir"), Vec::new())]);
-    assert_successful_parse!(OperationDefinition, "query likeStory @dir", result);
+                                vec![Directive::new(String::from("dir"), Vec::new())],
+                                Vec::new());
+    assert_successful_parse!(OperationDefinition, "query likeStory @dir { }", result);
   }
+
+  // ===========================================================================
+  // 2.4 Selection Set Tests
+  // ===========================================================================
+
+  // ===========================================================================
+  // 2.5 Fields Tests
+  // ===========================================================================
+
+  // ===========================================================================
+  // 2.6 Arguments Tests
+  // ===========================================================================
 
   #[test]
-  fn test_parse_type() {
-    assert_successful_parse!(TypeParser, "User", Type::Named(String::from("User")));
-    assert_successful_parse!(TypeParser,
-                             "[User]",
-                             Type::List(Box::new(Type::Named(String::from("User")))));
+  fn test_parse_argument() {
+    assert_successful_parse!(ArgumentParser,
+                             "x:1",
+                             Argument::new(String::from("x"), Value::Int(1)));
   }
+
+  // ===========================================================================
+  // 2.7 Alias Tests
+  // ===========================================================================
 
   #[test]
-  fn test_parse_nonnull_type() {
-    assert_successful_parse!(TypeParser,
-                             "!User",
-                             Type::NonNull(Box::new(Type::Named(String::from("User")))));
-    assert_successful_parse!(TypeParser,
-                             "![User]",
-                             Type::NonNull(Box::new(Type::List(Box::new(Type::Named(String::from("User")))))));
+  fn test_parse_alias() {
+    assert_successful_parse!(Alias, "asd:", String::from("asd"));
+    assert_successful_parse!(Alias, "asd :", String::from("asd"));
+    assert_successful_parse!(Alias, "asd \r\n:", String::from("asd"));
   }
 
-  #[test]
-  fn test_parse_variabledefinition_nodefaultvalue() {
-    assert_successful_parse!(VariableDefinitionParser,
-                             "$devicePicSize: Int",
-                             VariableDefinition::new(String::from("devicePicSize"),
-                                                     Type::Named(String::from("Int")),
-                                                     None));
-  }
+  // ===========================================================================
+  // 2.8 Fragments Tests
+  // ===========================================================================
 
-  #[test]
-  fn test_parse_variabledefinition_defaultvalue() {
-    assert_successful_parse!(VariableDefinitionParser,
-                             "$devicePicSize: Int = 10",
-                             VariableDefinition::new(String::from("devicePicSize"),
-                                                     Type::Named(String::from("Int")),
-                                                     Some(Value::Int(10))));
-
-    assert_successful_parse!(VariableDefinitionParser,
-                             "$devicePicSize: Float = 1.0",
-                             VariableDefinition::new(String::from("devicePicSize"),
-                                                     Type::Named(String::from("Float")),
-                                                     Some(Value::Float(1.0))));
-  }
+  // ===========================================================================
+  // 2.9 Value Tests
+  // ===========================================================================
 
   #[test]
   fn test_parse_intvalue() {
@@ -1020,12 +1045,58 @@ mod tests {
                              Value::String(String::from("hello\n%")));
   }
 
+  // ===========================================================================
+  // 2.10 Variables Tests
+  // ===========================================================================
   #[test]
-  fn test_parse_argument() {
-    assert_successful_parse!(ArgumentParser,
-                             "x:1",
-                             Argument::new(String::from("x"), Value::Int(1)));
+  fn test_parse_variabledefinition_nodefaultvalue() {
+    assert_successful_parse!(VariableDefinitionParser,
+                             "$devicePicSize: Int",
+                             VariableDefinition::new(String::from("devicePicSize"),
+                                                     Type::Named(String::from("Int")),
+                                                     None));
   }
+
+  #[test]
+  fn test_parse_variabledefinition_defaultvalue() {
+    assert_successful_parse!(VariableDefinitionParser,
+                             "$devicePicSize: Int = 10",
+                             VariableDefinition::new(String::from("devicePicSize"),
+                                                     Type::Named(String::from("Int")),
+                                                     Some(Value::Int(10))));
+
+    assert_successful_parse!(VariableDefinitionParser,
+                             "$devicePicSize: Float = 1.0",
+                             VariableDefinition::new(String::from("devicePicSize"),
+                                                     Type::Named(String::from("Float")),
+                                                     Some(Value::Float(1.0))));
+  }
+
+  // ===========================================================================
+  // 2.11 Type Tests
+  // ===========================================================================
+
+  #[test]
+  fn test_parse_type() {
+    assert_successful_parse!(TypeParser, "User", Type::Named(String::from("User")));
+    assert_successful_parse!(TypeParser,
+                             "[User]",
+                             Type::List(Box::new(Type::Named(String::from("User")))));
+  }
+
+  #[test]
+  fn test_parse_nonnull_type() {
+    assert_successful_parse!(TypeParser,
+                             "!User",
+                             Type::NonNull(Box::new(Type::Named(String::from("User")))));
+    assert_successful_parse!(TypeParser,
+                             "![User]",
+                             Type::NonNull(Box::new(Type::List(Box::new(Type::Named(String::from("User")))))));
+  }
+
+  // ===========================================================================
+  // 2.12 Directive Tests
+  // ===========================================================================
 
   #[test]
   fn test_parse_directive() {
@@ -1043,6 +1114,7 @@ mod tests {
 
   #[test]
   fn test_parse_directives() {
+    // multiple directives
     assert_successful_parse!(Directives,
                              "@dir\n@dir2(x:1)",
                              vec![Directive::new(String::from("dir"), Vec::new()),
