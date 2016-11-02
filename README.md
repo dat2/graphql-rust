@@ -1,4 +1,4 @@
-# graphql-rust [![Build Status](https://travis-ci.org/dat2/graphql-rust.svg?branch=master)](https://travis-ci.org/dat2/graphql-rust)
+# graphql-rust [![Build Status](https://travis-ci.org/dat2/graphql-rust.svg?branch=master)](https://travis-ci.org/dat2/graphql-rust) [![codecov](https://codecov.io/gh/dat2/graphql-rust/branch/master/graph/badge.svg)](https://codecov.io/gh/dat2/graphql-rust)
 GraphQL in Rust!
 
 ## Features Planned
