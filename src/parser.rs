@@ -13,13 +13,15 @@ use ast::*;
 // ===========================================================================
 // The main make_parser macro
 // ===========================================================================
-
 macro_rules! make_parser {
 
-    // base case
+// base case
     () => {};
 
-    ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty { $($tmpl:tt)+ } $($rest:tt)*) => {
+    ($name:ident ($input_var:ident : $input_item_type:ty) -> $output_type:ty {
+        $($tmpl:tt)+
+      }
+      $($rest:tt)*) => {
 
       #[derive(Clone)]
       #[allow(missing_docs)]
@@ -83,14 +85,19 @@ macro_rules! make_parser {
 }
 
 // TODO graphql and char have a very differing set of code points
-// graphql :: [0009,000A,000D, [0020,FFFF] ]
+// https://github.com/facebook/graphql/issues/214
+// https://github.com/facebook/graphql/pull/231
+
+// http://facebook.github.io/graphql/#SourceCharacter
+// graphql :: [0009,000A,000D, [0020,FFFF]]
+
+// https://doc.rust-lang.org/std/char/
+// http://www.unicode.org/glossary/#unicode_scalar_value
 // char :: [0,D7FF] u [E000,10FFFF]
-// somehow we need to wrangle char to match the graphql types :)
 
 // ===========================================================================
 // Utility Functions
 // ===========================================================================
-
 fn or_empty<T>(opt_vec: Option<Vec<T>>) -> Vec<T> {
   match opt_vec {
     Some(vec) => vec,
@@ -174,7 +181,11 @@ make_parser!(
 make_parser!(
   DocumentParser(input: char) -> Document {
     try(SelectionSet::new().map(|selection_set| {
-      vec![Definition::Operation(Operation::new(OperationType::Query,None,Vec::new(),Vec::new(),selection_set))]
+      vec![
+        Definition::Operation(
+          Operation::new(OperationType::Query,None,Vec::new(),Vec::new(),selection_set)
+        )
+      ]
     }))
       .or(many1::<Vec<_>,_>(
         OperationDefinition::new().map(Definition::Operation)
@@ -221,8 +232,11 @@ make_parser!(
 // ===========================================================================
 make_parser!(
   SelectionSet(input: char) -> Vec<Selection> {
-    between(char('{').skip(ignore_parser!()), char('}').skip(ignore_parser!()), many::<Vec<_>,_>(SelectionParser::new()))
-      .skip(ignore_parser!())
+    between(
+      char('{').skip(ignore_parser!()),
+      char('}').skip(ignore_parser!()),
+      many::<Vec<_>,_>(SelectionParser::new())
+    )
       .parse_lazy(input)
   }
 );
@@ -247,7 +261,10 @@ make_parser!(
       .and(optional(Directives::new()))
       .and(optional(SelectionSet::new()))
       .map(|((((opt_alias,name),opt_arguments),opt_directives),opt_selection_set)| {
-        Field::new(opt_alias,name,or_empty(opt_arguments),or_empty(opt_directives),or_empty(opt_selection_set))
+        let arguments = or_empty(opt_arguments);
+        let directives = or_empty(opt_directives);
+        let selection_set = or_empty(opt_selection_set);
+        Field::new(opt_alias,name,arguments,directives,selection_set)
       })
       .skip(ignore_parser!())
       .parse_lazy(input)
@@ -331,6 +348,7 @@ make_parser!(
 make_parser!(
   InlineFragmentParser(input: char) -> InlineFragment {
     string("...")
+      .skip(ignore_parser!())
       .with(optional(TypeCondition::new()))
       .and(optional(Directives::new()))
       .and(SelectionSet::new())
@@ -635,7 +653,11 @@ make_parser!(
 
 make_parser!(
   ListValue(input: char, constant: &bool) -> Value {
-    between(char('[').skip(ignore_parser!()), char(']').skip(ignore_parser!()), many(ValueParser::new(constant)))
+    between(
+      char('[').skip(ignore_parser!()),
+      char(']').skip(ignore_parser!()),
+      many(ValueParser::new(constant))
+    )
       .map(Value::List)
       .parse_lazy(input)
   }
@@ -879,15 +901,55 @@ mod tests {
     assert_successful_parse!(OperationDefinition, "query likeStory @dir { }", result);
   }
 
+  #[test]
+  fn test_parse_operation_selectionset() {
+    // operation with selection set
+    let result = Operation::new(OperationType::Query,
+                                Some(String::from("likeStory")),
+                                Vec::new(),
+                                Vec::new(),
+                                vec![Selection::Field(Field::new(None,
+                                                                 String::from("id"),
+                                                                 Vec::new(),
+                                                                 Vec::new(),
+                                                                 Vec::new()))]);
+    assert_successful_parse!(OperationDefinition, "query likeStory { id }", result);
+  }
+
   // ===========================================================================
   // 2.4 Selection Set Tests
   // ===========================================================================
 
   #[test]
   fn test_parse_selectionset_fields() {
-    let result = vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))];
+    // selection set with fields only
+    let result =
+      vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))];
 
     assert_successful_parse!(SelectionSet, "{ id }", result);
+  }
+
+  #[test]
+  fn test_parse_selectionset_fragmentspread() {
+    // selection set with fragment only
+    let result = vec![Selection::FragmentSpread(FragmentSpread::new(String::from("friendsFragment"),
+                                                                    Vec::new()))];
+
+    assert_successful_parse!(SelectionSet, "{ ...friendsFragment }", result);
+  }
+
+  #[test]
+  fn test_parse_selectionset_inlinefragment() {
+    // selection set with inline fragment only
+    let result = vec![Selection::InlineFragment(InlineFragment::new(Some(Type::Named(String::from("User"))),
+                                                                    Vec::new(),
+                                                                    vec![Selection::Field(Field::new(None,
+                                                                                          String::from("id"),
+                                                                                          Vec::new(),
+                                                                                          Vec::new(),
+                                                                                          Vec::new()))]))];
+
+    assert_successful_parse!(SelectionSet, "{ ... on User { id } }", result);
   }
 
   // ===========================================================================
@@ -896,6 +958,7 @@ mod tests {
 
   #[test]
   fn test_parse_field_simple() {
+    // field with only name
     let result = Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new());
 
     assert_successful_parse!(FieldParser, "id", result);
@@ -903,6 +966,7 @@ mod tests {
 
   #[test]
   fn test_parse_field_alias() {
+    // field with an alias
     let result = Field::new(Some(String::from("alias")),
                             String::from("id"),
                             Vec::new(),
@@ -914,6 +978,7 @@ mod tests {
 
   #[test]
   fn test_parse_field_arguments() {
+    // field iwht arguments
     let result = Field::new(None,
                             String::from("profilePic"),
                             vec![Argument::new(String::from("size"), Value::Int(100))],
@@ -925,6 +990,7 @@ mod tests {
 
   #[test]
   fn test_parse_field_directives() {
+    // field with directives
     let result = Field::new(None,
                             String::from("id"),
                             Vec::new(),
@@ -936,13 +1002,16 @@ mod tests {
 
   #[test]
   fn test_parse_field_selectionset() {
-    let result =
-      Field::new(None,
-                 String::from("me"),
-                 Vec::new(),
-                 Vec::new(),
-                 vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))]
-                 );
+    // field with a sub selection set
+    let result = Field::new(None,
+                            String::from("me"),
+                            Vec::new(),
+                            Vec::new(),
+                            vec![Selection::Field(Field::new(None,
+                                                             String::from("id"),
+                                                             Vec::new(),
+                                                             Vec::new(),
+                                                             Vec::new()))]);
 
     assert_successful_parse!(FieldParser, "me { id }", result);
   }
