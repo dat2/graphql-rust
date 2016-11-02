@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 pub type Name = String;
-pub type SelectionSet = Vec<Selection>;
 
 #[derive(Debug,PartialEq,Clone)]
 pub struct Document {
@@ -26,16 +25,16 @@ pub struct Operation {
   name: Option<Name>,
   variable_definitions: Vec<VariableDefinition>,
   directives: Vec<Directive>,
-  selection_set: SelectionSet,
+  selection_set: Vec<Selection>,
 }
 
 impl Operation {
   pub fn new(op_type: OperationType,
-         name: Option<Name>,
-         variable_definitions: Vec<VariableDefinition>,
-         directives: Vec<Directive>,
-         selection_set: SelectionSet)
-         -> Operation {
+             name: Option<Name>,
+             variable_definitions: Vec<VariableDefinition>,
+             directives: Vec<Directive>,
+             selection_set: Vec<Selection>)
+             -> Operation {
     Operation {
       op_type: op_type,
       name: name,
@@ -134,16 +133,16 @@ pub struct Field {
   name: Name,
   arguments: Vec<Argument>,
   directives: Vec<Directive>,
-  selection_set: SelectionSet,
+  selection_set: Vec<Selection>,
 }
 
 impl Field {
   pub fn new(alias: Option<Name>,
-         name: Name,
-         arguments: Vec<Argument>,
-         directives: Vec<Directive>,
-         selection_set: SelectionSet)
-         -> Field {
+             name: Name,
+             arguments: Vec<Argument>,
+             directives: Vec<Directive>,
+             selection_set: Vec<Selection>)
+             -> Field {
     Field {
       alias: alias,
       name: name,
@@ -173,11 +172,14 @@ impl FragmentSpread {
 pub struct InlineFragment {
   type_condition: Option<Type>,
   directives: Vec<Directive>,
-  selection_set: SelectionSet,
+  selection_set: Vec<Selection>,
 }
 
 impl InlineFragment {
-  pub fn new(type_condition: Option<Type>, directives: Vec<Directive>, selection_set: SelectionSet) -> InlineFragment {
+  pub fn new(type_condition: Option<Type>,
+             directives: Vec<Directive>,
+             selection_set: Vec<Selection>)
+             -> InlineFragment {
     InlineFragment {
       type_condition: type_condition,
       directives: directives,
@@ -191,11 +193,11 @@ pub struct Fragment {
   name: Name,
   type_condition: Type,
   directives: Vec<Directive>,
-  selection_set: SelectionSet,
+  selection_set: Vec<Selection>,
 }
 
 impl Fragment {
-  pub fn new(name: Name, type_condition: Type, directives: Vec<Directive>, selection_set: SelectionSet) -> Fragment {
+  pub fn new(name: Name, type_condition: Type, directives: Vec<Directive>, selection_set: Vec<Selection>) -> Fragment {
     Fragment {
       name: name,
       type_condition: type_condition,
@@ -204,4 +206,3 @@ impl Fragment {
     }
   }
 }
-

@@ -173,7 +173,7 @@ make_parser!(
 // short‐hand form which omits the query keyword and query name.
 make_parser!(
   DocumentParser(input: char) -> Document {
-    try(SelectionSetParser::new().map(|selection_set| {
+    try(SelectionSet::new().map(|selection_set| {
       vec![Definition::Operation(Operation::new(OperationType::Query,None,Vec::new(),Vec::new(),selection_set))]
     }))
       .or(many1::<Vec<_>,_>(
@@ -196,7 +196,7 @@ make_parser!(
       .and(optional(NameParser::new()))
       .and(optional(VariableDefinitions::new()))
       .and(optional(Directives::new()))
-      .and(SelectionSetParser::new())
+      .and(SelectionSet::new())
       .map(|((((op_type,name),opt_variable_definitions),opt_directives),selection_set)| {
         let variable_definitions = or_empty(opt_variable_definitions);
         let directives = or_empty(opt_directives);
@@ -220,7 +220,7 @@ make_parser!(
 // 2.4 Selection Set Parsers
 // ===========================================================================
 make_parser!(
-  SelectionSetParser(input: char) -> SelectionSet {
+  SelectionSet(input: char) -> Vec<Selection> {
     between(char('{').skip(ignore_parser!()), char('}').skip(ignore_parser!()), many::<Vec<_>,_>(SelectionParser::new()))
       .skip(ignore_parser!())
       .parse_lazy(input)
@@ -241,11 +241,11 @@ make_parser!(
 // ===========================================================================
 make_parser!(
   FieldParser(input: char) -> Field {
-    optional(Alias::new())
+    optional(try(Alias::new()))
       .and(NameParser::new())
       .and(optional(Arguments::new()))
       .and(optional(Directives::new()))
-      .and(optional(SelectionSetParser::new()))
+      .and(optional(SelectionSet::new()))
       .map(|((((opt_alias,name),opt_arguments),opt_directives),opt_selection_set)| {
         Field::new(opt_alias,name,or_empty(opt_arguments),or_empty(opt_directives),or_empty(opt_selection_set))
       })
@@ -333,7 +333,7 @@ make_parser!(
     string("...")
       .with(optional(TypeCondition::new()))
       .and(optional(Directives::new()))
-      .and(SelectionSetParser::new())
+      .and(SelectionSet::new())
       .map(|((opt_type_condition,opt_directives),selection_set)| {
         InlineFragment::new(opt_type_condition,or_empty(opt_directives),selection_set)
       })
@@ -358,7 +358,7 @@ make_parser!(
       .with(FragmentNameParser::new())
       .and(TypeCondition::new())
       .and(optional(Directives::new()))
-      .and(SelectionSetParser::new())
+      .and(SelectionSet::new())
       .map(|(((fragment_name,type_condition),opt_directives),selection_set)| {
         Fragment::new(fragment_name,type_condition,or_empty(opt_directives),selection_set)
       })
@@ -661,7 +661,7 @@ make_parser!(
       .map(|fields| {
         let mut result = HashMap::new();
 
-  // TODO complain about same name fields?
+// TODO complain about same name fields?
         for (name,value) in fields.into_iter() {
           result.insert(name, value);
         }
@@ -844,7 +844,11 @@ mod tests {
 
     // non named
     {
-      let result = Operation::new(OperationType::Mutation, None, Vec::new(), Vec::new(), Vec::new());
+      let result = Operation::new(OperationType::Mutation,
+                                  None,
+                                  Vec::new(),
+                                  Vec::new(),
+                                  Vec::new());
       assert_successful_parse!(OperationDefinition, "mutation { }", result);
     }
   }
@@ -879,9 +883,69 @@ mod tests {
   // 2.4 Selection Set Tests
   // ===========================================================================
 
+  #[test]
+  fn test_parse_selectionset_fields() {
+    let result = vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))];
+
+    assert_successful_parse!(SelectionSet, "{ id }", result);
+  }
+
   // ===========================================================================
   // 2.5 Fields Tests
   // ===========================================================================
+
+  #[test]
+  fn test_parse_field_simple() {
+    let result = Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new());
+
+    assert_successful_parse!(FieldParser, "id", result);
+  }
+
+  #[test]
+  fn test_parse_field_alias() {
+    let result = Field::new(Some(String::from("alias")),
+                            String::from("id"),
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new());
+
+    assert_successful_parse!(FieldParser, "alias: id", result);
+  }
+
+  #[test]
+  fn test_parse_field_arguments() {
+    let result = Field::new(None,
+                            String::from("profilePic"),
+                            vec![Argument::new(String::from("size"), Value::Int(100))],
+                            Vec::new(),
+                            Vec::new());
+
+    assert_successful_parse!(FieldParser, "profilePic(size: 100)", result);
+  }
+
+  #[test]
+  fn test_parse_field_directives() {
+    let result = Field::new(None,
+                            String::from("id"),
+                            Vec::new(),
+                            vec![Directive::new(String::from("test"), Vec::new())],
+                            Vec::new());
+
+    assert_successful_parse!(FieldParser, "id @test", result);
+  }
+
+  #[test]
+  fn test_parse_field_selectionset() {
+    let result =
+      Field::new(None,
+                 String::from("me"),
+                 Vec::new(),
+                 Vec::new(),
+                 vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))]
+                 );
+
+    assert_successful_parse!(FieldParser, "me { id }", result);
+  }
 
   // ===========================================================================
   // 2.6 Arguments Tests
