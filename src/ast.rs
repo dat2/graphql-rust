@@ -168,11 +168,7 @@ pub struct Fragment {
 }
 
 impl Fragment {
-  pub fn new(name: Name,
-             type_condition: Type,
-             directives: Vec<Directive>,
-             selection_set: Vec<Selection>)
-             -> Fragment {
+  pub fn new(name: Name, type_condition: Type, directives: Vec<Directive>, selection_set: Vec<Selection>) -> Fragment {
     Fragment {
       name: name,
       type_condition: type_condition,

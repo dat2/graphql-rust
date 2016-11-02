@@ -904,15 +904,12 @@ mod tests {
   #[test]
   fn test_parse_operation_selectionset() {
     // operation with selection set
-    let result = Operation::new(OperationType::Query,
-                                Some(String::from("likeStory")),
-                                Vec::new(),
-                                Vec::new(),
-                                vec![Selection::Field(Field::new(None,
-                                                                 String::from("id"),
-                                                                 Vec::new(),
-                                                                 Vec::new(),
-                                                                 Vec::new()))]);
+    let result =
+      Operation::new(OperationType::Query,
+                     Some(String::from("likeStory")),
+                     Vec::new(),
+                     Vec::new(),
+                     vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))]);
     assert_successful_parse!(OperationDefinition, "query likeStory { id }", result);
   }
 
@@ -923,8 +920,7 @@ mod tests {
   #[test]
   fn test_parse_selectionset_fields() {
     // selection set with fields only
-    let result =
-      vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))];
+    let result = vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))];
 
     assert_successful_parse!(SelectionSet, "{ id }", result);
   }
@@ -932,8 +928,7 @@ mod tests {
   #[test]
   fn test_parse_selectionset_fragmentspread() {
     // selection set with fragment only
-    let result = vec![Selection::FragmentSpread(FragmentSpread::new(String::from("friendsFragment"),
-                                                                    Vec::new()))];
+    let result = vec![Selection::FragmentSpread(FragmentSpread::new(String::from("friendsFragment"), Vec::new()))];
 
     assert_successful_parse!(SelectionSet, "{ ...friendsFragment }", result);
   }
@@ -1003,15 +998,12 @@ mod tests {
   #[test]
   fn test_parse_field_selectionset() {
     // field with a sub selection set
-    let result = Field::new(None,
-                            String::from("me"),
-                            Vec::new(),
-                            Vec::new(),
-                            vec![Selection::Field(Field::new(None,
-                                                             String::from("id"),
-                                                             Vec::new(),
-                                                             Vec::new(),
-                                                             Vec::new()))]);
+    let result =
+      Field::new(None,
+                 String::from("me"),
+                 Vec::new(),
+                 Vec::new(),
+                 vec![Selection::Field(Field::new(None, String::from("id"), Vec::new(), Vec::new(), Vec::new()))]);
 
     assert_successful_parse!(FieldParser, "me { id }", result);
   }
@@ -1019,6 +1011,14 @@ mod tests {
   // ===========================================================================
   // 2.6 Arguments Tests
   // ===========================================================================
+
+  #[test]
+  fn test_parse_arguments() {
+    assert_successful_parse!(Arguments,
+                             "(x:1 y:2)",
+                             vec![Argument::new(String::from("x"), Value::Int(1)),
+                                  Argument::new(String::from("y"), Value::Int(2))]);
+  }
 
   #[test]
   fn test_parse_argument() {
@@ -1041,6 +1041,85 @@ mod tests {
   // ===========================================================================
   // 2.8 Fragments Tests
   // ===========================================================================
+
+  #[test]
+  fn test_parse_fragmentspread() {
+    assert_successful_parse!(FragmentSpreadParser,
+                             "...friendsFragment",
+                             FragmentSpread::new(String::from("friendsFragment"), Vec::new()));
+  }
+
+  #[test]
+  fn test_parse_fragmentspread_directives() {
+    assert_successful_parse!(FragmentSpreadParser,
+                             "...friendsFragment @test",
+                             FragmentSpread::new(String::from("friendsFragment"),
+                                                 vec![Directive::new(String::from("test"), Vec::new())]));
+  }
+
+  #[test]
+  fn test_parse_fragmentdefinition() {
+    assert_successful_parse!(FragmentDefinition,
+                             "fragment friendsFragment on User { }",
+                             Fragment::new(String::from("friendsFragment"),
+                                           Type::Named(String::from("User")),
+                                           Vec::new(),
+                                           Vec::new()));
+  }
+
+  #[test]
+  fn test_parse_fragmentdefinition_directives() {
+    assert_successful_parse!(FragmentDefinition,
+                             "fragment friendsFragment on User @test { }",
+                             Fragment::new(String::from("friendsFragment"),
+                                           Type::Named(String::from("User")),
+                                           vec![Directive::new(String::from("test"), Vec::new())],
+                                           Vec::new()));
+  }
+
+  #[test]
+  fn test_parse_fragmentdefinition_selectionset() {
+    assert_successful_parse!(FragmentDefinition,
+                             "fragment friendsFragment on User { friends }",
+                             Fragment::new(String::from("friendsFragment"),
+                                           Type::Named(String::from("User")),
+                                           Vec::new(),
+                                           vec![Selection::Field(Field::new(None,
+                                                                            String::from("friends"),
+                                                                            Vec::new(),
+                                                                            Vec::new(),
+                                                                            Vec::new()))]));
+  }
+
+  #[test]
+  fn test_parse_typecondition() {
+    assert_successful_parse!(TypeCondition, "on User", Type::Named(String::from("User")));
+  }
+
+  #[test]
+  fn test_parse_inlinefragment() {
+    assert_successful_parse!(InlineFragmentParser,
+                             "... {}",
+                             InlineFragment::new(None, Vec::new(), Vec::new()));
+  }
+
+  #[test]
+  fn test_parse_inlinefragment_typecondition() {
+    assert_successful_parse!(InlineFragmentParser,
+                             "... on User {}",
+                             InlineFragment::new(Some(Type::Named(String::from("User"))),
+                                                 Vec::new(),
+                                                 Vec::new()));
+  }
+
+  #[test]
+  fn test_parse_inlinefragment_directives() {
+    assert_successful_parse!(InlineFragmentParser,
+                             "... @test {}",
+                             InlineFragment::new(None,
+                                                 vec![Directive::new(String::from("test"), Vec::new())],
+                                                 Vec::new()));
+  }
 
   // ===========================================================================
   // 2.9 Value Tests
