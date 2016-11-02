@@ -800,7 +800,7 @@ make_parser!(
 mod tests {
   use super::*;
   use ast::*;
-  use combine::{State, Parser};
+  use combine::{State, Parser, many, value};
 
   use std::collections::HashMap;
 
@@ -838,9 +838,16 @@ mod tests {
     assert_successful_parse!(NameParser, "Zasd", String::from("Zasd"));
   }
 
+  #[test]
+  fn test_parse_ignore() {
+    assert_successful_parse!(value(()).skip(ignore_parser!()), "# hello world\r\n \r\n", ());
+  }
+
   // ===========================================================================
   // 2.2 Document Tests
   // ===========================================================================
+
+  // TODO
 
   // ===========================================================================
   // 2.3 Operation Tests
@@ -1154,13 +1161,51 @@ mod tests {
   }
 
   #[test]
-  fn test_parse_const_listvalue() {
-    assert_successful_parse!(ListValue::new(&true),
-                             "[null]",
-                             Value::List(vec![Value::Null]));
-    assert_successful_parse!(ListValue::new(&true),
-                             "[null true false]",
-                             Value::List(vec![Value::Null, Value::Boolean(true), Value::Boolean(false)]));
+  fn test_parse_booleanvalue() {
+    assert_successful_parse!(BooleanValue, "true", Value::Boolean(true));
+    assert_successful_parse!(BooleanValue, "false", Value::Boolean(false));
+  }
+
+
+  #[test]
+  fn test_parse_string_unicodeescape() {
+    // unicode string
+    assert_successful_parse!(StringValue, r#""\u0025""#, Value::String(String::from("%")));
+    assert_successful_parse!(StringValue, r#""\u0040""#, Value::String(String::from("@")));
+  }
+
+  #[test]
+  fn test_parse_string_escaped() {
+    assert_successful_parse!(StringValue, r#""\"""#, Value::String(String::from("\"")));
+    assert_successful_parse!(StringValue, r#""\\""#, Value::String(String::from("\\")));
+    assert_successful_parse!(StringValue, r#""\/""#, Value::String(String::from("/")));
+    assert_successful_parse!(StringValue, r#""\b""#, Value::String(String::from("\x08")));
+    assert_successful_parse!(StringValue, r#""\f""#, Value::String(String::from("\x0C")));
+    assert_successful_parse!(StringValue, r#""\n""#, Value::String(String::from("\n")));
+    assert_successful_parse!(StringValue, r#""\r""#, Value::String(String::from("\r")));
+    assert_successful_parse!(StringValue, r#""\t""#, Value::String(String::from("\t")));
+  }
+
+  #[test]
+  fn test_parse_stringvalue() {
+    // empty string
+    assert_successful_parse!(StringValue, r#""""#, Value::String(String::from("")));
+
+    // strings with random stuff in it
+    assert_successful_parse!(StringValue,
+                             r#""hello world""#,
+                             Value::String(String::from("hello world")));
+    assert_successful_parse!(StringValue,
+                             r#""hello \u0025""#,
+                             Value::String(String::from("hello %")));
+    assert_successful_parse!(StringValue,
+                             r#""hello\n\u0025""#,
+                             Value::String(String::from("hello\n%")));
+  }
+
+  #[test]
+  fn test_parse_nullvalue() {
+    assert_successful_parse!(NullValue, "null", Value::Null);
   }
 
   #[test]
@@ -1203,6 +1248,16 @@ mod tests {
   }
 
   #[test]
+  fn test_parse_listvalue() {
+    assert_successful_parse!(ListValue::new(&true),
+                             "[null]",
+                             Value::List(vec![Value::Null]));
+    assert_successful_parse!(ListValue::new(&true),
+                             "[null true false]",
+                             Value::List(vec![Value::Null, Value::Boolean(true), Value::Boolean(false)]));
+  }
+
+  #[test]
   fn test_parse_enumvalue_successful() {
     assert_successful_parse!(EnumValue, "test", Value::Enum(String::from("test")));
   }
@@ -1221,47 +1276,16 @@ mod tests {
     assert_successful_parse!(ObjectValue::new(&true), "{ x : 1 }", value);
   }
 
-  #[test]
-  fn test_parse_string_unicodeescape() {
-    // unicode string
-    assert_successful_parse!(StringValue, r#""\u0025""#, Value::String(String::from("%")));
-    assert_successful_parse!(StringValue, r#""\u0040""#, Value::String(String::from("@")));
-  }
-
-  #[test]
-  fn test_parse_string_escaped() {
-    assert_successful_parse!(StringValue, r#""\"""#, Value::String(String::from("\"")));
-    assert_successful_parse!(StringValue, r#""\\""#, Value::String(String::from("\\")));
-    assert_successful_parse!(StringValue, r#""\/""#, Value::String(String::from("/")));
-    assert_successful_parse!(StringValue, r#""\b""#, Value::String(String::from("\x08")));
-    assert_successful_parse!(StringValue, r#""\f""#, Value::String(String::from("\x0C")));
-    assert_successful_parse!(StringValue, r#""\n""#, Value::String(String::from("\n")));
-    assert_successful_parse!(StringValue, r#""\r""#, Value::String(String::from("\r")));
-    assert_successful_parse!(StringValue, r#""\t""#, Value::String(String::from("\t")));
-  }
-
-  #[test]
-  fn test_parse_stringvalue() {
-    // empty string
-    assert_successful_parse!(StringValue, r#""""#, Value::String(String::from("")));
-
-    // strings with random stuff in it
-    assert_successful_parse!(StringValue,
-                             r#""hello world""#,
-                             Value::String(String::from("hello world")));
-    assert_successful_parse!(StringValue,
-                             r#""hello \u0025""#,
-                             Value::String(String::from("hello %")));
-    assert_successful_parse!(StringValue,
-                             r#""hello\n\u0025""#,
-                             Value::String(String::from("hello\n%")));
-  }
-
   // ===========================================================================
   // 2.10 Variables Tests
   // ===========================================================================
   #[test]
-  fn test_parse_variabledefinition_nodefaultvalue() {
+  fn test_parse_variable() {
+    assert_successful_parse!(ValueParser::new(&false), "$var", Value::Variable(String::from("var")));
+  }
+
+  #[test]
+  fn test_parse_variabledefinition() {
     assert_successful_parse!(VariableDefinitionParser,
                              "$devicePicSize: Int",
                              VariableDefinition::new(String::from("devicePicSize"),
@@ -1283,6 +1307,8 @@ mod tests {
                                                      Type::Named(String::from("Float")),
                                                      Some(Value::Float(1.0))));
   }
+
+  // TODO variable definitions
 
   // ===========================================================================
   // 2.11 Type Tests
