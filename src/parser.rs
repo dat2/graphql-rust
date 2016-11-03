@@ -407,7 +407,7 @@ make_parser!(
 
 make_parser!(
   IntPart(input: char) -> (Option<char>,String) {
-    optional(char('-'))
+    optional(char('-').or(char('+')))
       .and(
         or(
           char('0').map(|c: char| c.to_string()),
@@ -427,10 +427,10 @@ make_parser!(
 make_parser!(
   IntValue(input: char) -> Value {
     IntPart::new()
-      .map(|(neg,number)| {
-        match neg {
-          Some(_) => -number.parse::<i32>().unwrap(),
-          None => number.parse::<i32>().unwrap()
+      .map(|(sign,number)| {
+        match sign {
+          Some('-') => -number.parse::<i32>().unwrap(),
+          _ => number.parse::<i32>().unwrap()
         }
       })
       .map(Value::Int)
@@ -461,8 +461,6 @@ make_parser!(
       .map(|(int_part,(opt_fract_part, opt_exp_part)) : (String, (Option<String>,Option<String>))| {
         let mut result = String::new();
         result.push_str(&int_part);
-
-        println!("{:?} {:?} {:?}", int_part, opt_fract_part, opt_exp_part);
 
         match opt_fract_part {
           Some(fract_part) => {
@@ -874,24 +872,22 @@ mod tests {
   #[test]
   fn test_parse_operation_name() {
     // named operation
-    {
-      let result = Operation::new(OperationType::Mutation,
-                                  Some(String::from("test")),
-                                  Vec::new(),
-                                  Vec::new(),
-                                  Vec::new());
-      assert_successful_parse!(OperationDefinition, "mutation test { }", result);
-    }
+    let result = Operation::new(OperationType::Mutation,
+                                Some(String::from("test")),
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new());
+    assert_successful_parse!(OperationDefinition, "mutation test { }", result);
+  }
 
-    // non named
-    {
-      let result = Operation::new(OperationType::Mutation,
-                                  None,
-                                  Vec::new(),
-                                  Vec::new(),
-                                  Vec::new());
-      assert_successful_parse!(OperationDefinition, "mutation { }", result);
-    }
+  #[test]
+  fn test_parse_operation_noname() {
+    let result = Operation::new(OperationType::Mutation,
+                                None,
+                                Vec::new(),
+                                Vec::new(),
+                                Vec::new());
+    assert_successful_parse!(OperationDefinition, "mutation { }", result);
   }
 
   #[test]
@@ -1163,10 +1159,13 @@ mod tests {
   fn test_parse_intvalue() {
     assert_successful_parse!(IntValue, "0", Value::Int(0));
     assert_successful_parse!(IntValue, "-0", Value::Int(0));
+    assert_successful_parse!(IntValue, "+0", Value::Int(0));
     assert_successful_parse!(IntValue, "1", Value::Int(1));
     assert_successful_parse!(IntValue, "-1", Value::Int(-1));
+    assert_successful_parse!(IntValue, "+1", Value::Int(1));
     assert_successful_parse!(IntValue, "10", Value::Int(10));
     assert_successful_parse!(IntValue, "-10", Value::Int(-10));
+    assert_successful_parse!(IntValue, "+10", Value::Int(10));
   }
 
   #[test]
