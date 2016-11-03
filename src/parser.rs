@@ -112,7 +112,7 @@ macro_rules! ignore_parser {
   () => (
     many::<Vec<_>,_>(
       WhiteSpace::new()
-        .or(LineTerminator::new(&true))
+        .or(LineTerminator::new())
         .or(LineComment::new())
       )
   )
@@ -127,20 +127,14 @@ make_parser!(
 );
 
 make_parser!(
-  LineTerminator(input: char, is_clr: &bool) -> () {
+  LineTerminator(input: char) -> () {
 
     let cr = char('\r');
     let lf = char('\n');
 
-    if !is_clr {
-      value(())
-        .skip(cr.or(lf))
-        .parse_lazy(input)
-    } else {
-      value(())
-        .skip(crlf().or(cr).or(lf))
-        .parse_lazy(input)
-    }
+    value(())
+      .skip(crlf().or(cr).or(lf))
+      .parse_lazy(input)
   }
 );
 
@@ -149,7 +143,7 @@ make_parser!(
     value(())
       .skip(char('#'))
       .skip(many::<Vec<_>,_>(none_of("\r\n".chars())))
-      .skip(LineTerminator::new(&true))
+      .skip(LineTerminator::new())
       .parse_lazy(input)
   }
 );
@@ -570,24 +564,42 @@ fn hex_digit_to_u8(input: char) -> u8 {
   }
 }
 
+// http://www.fileformat.info/info/unicode/utf8.htm
+fn unicode_code_point_to_utf8(code_point: u32) -> Vec<u8> {
+  if code_point < 0x7F {
+    vec![code_point as u8]
+  } else if code_point <= 0x07FF {
+    // the first byte will be 110xxxxx
+    // the second byte will be 10xxxxxx
+    // code_point will have at most 11 bits.
+    let first = (code_point >> 6) as u8;
+    let second = (code_point as u8) & (0x3F);
+    vec![ 0xC2 | first, 0x80 | second ]
+  } else if code_point > 0x07FF && code_point <= 0xFFFF {
+    // the first byte will be 1110xxxx
+    // the second byte will be 10xxxxxx
+    // the third byte will be 10xxxxxx
+    let first = (code_point >> 12) as u8;
+    let second = (code_point >> 6) as u8 & 0x3f;
+    let third = (code_point as u8) & 0x3f;
+    vec![ 0xE0 | first, 0x80 | second, 0x80 | third]
+  } else {
+    Vec::new()
+  }
+}
+
 make_parser!(
   EscapedUnicode(input: char) -> String {
     string("\\u")
       .with(
         hex_digit().and(hex_digit()).and(hex_digit()).and(hex_digit())
           .map(|(((b1,b2),b3),b4)| {
+
             let left = hex_digit_to_u8(b1) << 4 ^ hex_digit_to_u8(b2);
             let right = hex_digit_to_u8(b3) << 4 ^ hex_digit_to_u8(b4);
+            let full_codepoint = (left as u32) << 8 ^ right as u32;
 
-            let mut bytes = vec![];
-            if left != 0 {
-              bytes.push(left);
-            }
-            if right != 0 {
-              bytes.push(right);
-            }
-
-            String::from_utf8(bytes).unwrap()
+            String::from_utf8(unicode_code_point_to_utf8(full_codepoint)).unwrap()
           })
       )
       .parse_lazy(input)
@@ -1046,7 +1058,7 @@ mod tests {
   }
 
   // ===========================================================================
-  // 2.8 Fragments Tests
+  // 2.8 Fragment Tests
   // ===========================================================================
 
   #[test]
@@ -1062,6 +1074,21 @@ mod tests {
                              "...friendsFragment @test",
                              FragmentSpread::new(String::from("friendsFragment"),
                                                  vec![Directive::new(String::from("test"), Vec::new())]));
+  }
+
+  #[test]
+  fn test_parse_fragmentname() {
+    // it should fail to parse on
+    {
+      let result = FragmentNameParser::new().parse(State::new("on")).map(|x| x.0);
+      match result {
+        Err(err) => {
+          assert!(format!("{}", err).contains("Unexpected `on`"));
+        }
+        // it should be an error
+        _ => assert!(false),
+      }
+    }
   }
 
   #[test]
@@ -1147,6 +1174,10 @@ mod tests {
     // test .
     assert_successful_parse!(FloatValue, "0.1", Value::Float(0.1));
 
+    // test sign
+    assert_successful_parse!(FloatValue, "-0.1", Value::Float(-0.1));
+    assert_successful_parse!(FloatValue, "+0.1", Value::Float(0.1));
+
     // test optional fract_part
     assert_successful_parse!(FloatValue, "10e1", Value::Float(10.0e1));
     assert_successful_parse!(FloatValue, "10.0e1", Value::Float(10.0e1));
@@ -1169,9 +1200,13 @@ mod tests {
 
   #[test]
   fn test_parse_string_unicodeescape() {
-    // unicode string
+    // C0 Controls and Basic Latin
     assert_successful_parse!(StringValue, r#""\u0025""#, Value::String(String::from("%")));
     assert_successful_parse!(StringValue, r#""\u0040""#, Value::String(String::from("@")));
+    // Latin Extended-B
+    assert_successful_parse!(StringValue, r#""\u01E2""#, Value::String(String::from("Ǣ")));
+    // Oriya
+    assert_successful_parse!(StringValue, r#""\u0B18""#, Value::String(String::from("ଘ")));
   }
 
   #[test]
